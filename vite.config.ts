@@ -14,7 +14,7 @@ export default defineConfig({
       manifest: {
         name: "アートメモ",
         short_name: "アートメモ",
-        description: "歌詞、MV場面、スケッチ、画像、音声を端末内に保存するメモ",
+        description: "歌詞、音、映像のアイデアをすばやく記録する個人用メモ",
         lang: "ja",
         theme_color: "#f2f2f7",
         background_color: "#f2f2f7",

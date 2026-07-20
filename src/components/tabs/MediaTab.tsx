@@ -1,38 +1,86 @@
 import { useEffect, useRef, useState } from "react";
 import { db, now, uid } from "../../db";
 import { compressImage, formatBytes } from "../../media";
-import type { MediaAsset, MediaKind, MediaLink } from "../../types";
+import type { MediaAsset } from "../../types";
 import type { TabProps } from "../SongEditor";
 import { BlobImage } from "../ui";
+import { SketchPanel } from "./SketchTab";
 
-function BlobAudio({ blob }: { blob?: Blob }) { const [url, setUrl] = useState(""); useEffect(() => { if (!blob) return; const next = URL.createObjectURL(blob); setUrl(next); return () => URL.revokeObjectURL(next); }, [blob]); return url ? <audio controls preload="metadata" src={url} /> : <p>音声データがありません</p>; }
+function BlobAudio({ blob }: { blob?: Blob }) {
+  const [url, setUrl] = useState("");
+  useEffect(() => { if (!blob) return; const next = URL.createObjectURL(blob); setUrl(next); return () => URL.revokeObjectURL(next); }, [blob]);
+  return url ? <audio controls preload="metadata" src={url} /> : <p>音声データがありません。</p>;
+}
 
-export function MediaTab({ song, workspace, setWorkspace, queueSave, notify }: TabProps) {
-  const [recording, setRecording] = useState(false); const [recordSeconds, setRecordSeconds] = useState(0); const [urlText, setUrlText] = useState(""); const [filter, setFilter] = useState<"all" | MediaKind>("all");
-  const recorder = useRef<MediaRecorder | undefined>(undefined); const chunks = useRef<Blob[]>([]); const timer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+export function MediaTab(props: TabProps) {
+  const { song, workspace, setWorkspace, queueSave, notify } = props;
+  const [recording, setRecording] = useState(false);
+  const [recordSeconds, setRecordSeconds] = useState(0);
+  const [urlText, setUrlText] = useState("");
+  const recorder = useRef<MediaRecorder | undefined>(undefined);
+  const chunks = useRef<Blob[]>([]);
+  const timer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   useEffect(() => () => { if (timer.current) clearInterval(timer.current); recorder.current?.stream.getTracks().forEach((track) => track.stop()); }, []);
 
-  async function addImages(files?: FileList | null) { if (!files) return; for (const file of Array.from(files)) { try { const blob = await compressImage(file); const asset: MediaAsset = { id: uid(), songId: song.id, kind: "image", name: file.name, mimeType: blob.type, blob, size: blob.size, links: [], createdAt: now(), updatedAt: now() }; await db.media.add(asset); setWorkspace((data) => ({ ...data, media: [asset, ...data.media] })); } catch (error) { notify(error instanceof Error ? error.message : "画像を保存できませんでした。"); } } }
-  async function startRecording() {
-    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") { notify("このSafariでは録音に対応していません。ボイスメモで録音し、音声ファイルとして追加してください。"); return; }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true }); const candidates = ["audio/mp4", "audio/webm;codecs=opus", "audio/webm"];
-      const mimeType = candidates.find((type) => MediaRecorder.isTypeSupported(type)); const next = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
-      chunks.current = []; next.ondataavailable = (event) => { if (event.data.size) chunks.current.push(event.data); };
-      next.onstop = async () => { const type = next.mimeType || chunks.current[0]?.type || "audio/webm"; const blob = new Blob(chunks.current, { type }); const asset: MediaAsset = { id: uid(), songId: song.id, kind: "audio", name: `録音 ${new Date().toLocaleString("ja-JP")}`, mimeType: type, blob, size: blob.size, links: [], createdAt: now(), updatedAt: now() }; try { await db.media.add(asset); setWorkspace((data) => ({ ...data, media: [asset, ...data.media] })); } catch (error) { notify(error instanceof Error ? error.message : "録音を保存できませんでした。"); } finally { stream.getTracks().forEach((track) => track.stop()); } };
-      recorder.current = next; next.start(1000); setRecordSeconds(0); setRecording(true); timer.current = setInterval(() => setRecordSeconds((s) => s + 1), 1000);
-    } catch (error) { notify(error instanceof DOMException && error.name === "NotAllowedError" ? "マイクの使用が許可されていません。Safariの設定でマイクを許可してください。" : "録音を開始できませんでした。"); }
-  }
-  function stopRecording() { recorder.current?.stop(); setRecording(false); if (timer.current) clearInterval(timer.current); }
-  async function addAudio(file?: File) { if (!file) return; if (!file.type.startsWith("audio/") && !/\.(m4a|mp3|wav|webm|ogg)$/i.test(file.name)) { notify("対応している音声ファイル（m4a、mp3、wav、webm、ogg）を選んでください。"); return; } const asset: MediaAsset = { id: uid(), songId: song.id, kind: "audio", name: file.name, mimeType: file.type || "audio/mpeg", blob: file, size: file.size, links: [], createdAt: now(), updatedAt: now() }; try { await db.media.add(asset); setWorkspace((data) => ({ ...data, media: [asset, ...data.media] })); } catch (error) { notify(error instanceof Error ? error.message : "音声を保存できませんでした。"); } }
-  async function addUrl() { try { const parsed = new URL(urlText); const asset: MediaAsset = { id: uid(), songId: song.id, kind: "url", name: parsed.hostname, mimeType: "text/uri-list", size: urlText.length, url: parsed.toString(), links: [], createdAt: now(), updatedAt: now() }; await db.media.add(asset); setWorkspace((data) => ({ ...data, media: [asset, ...data.media] })); setUrlText(""); } catch { notify("https:// から始まる正しいURLを入力してください。"); } }
-  function patch(asset: MediaAsset, values: Partial<MediaAsset>) { const updated = { ...asset, ...values, updatedAt: now() }; setWorkspace((data) => ({ ...data, media: data.media.map((x) => x.id === asset.id ? updated : x) })); queueSave(db.media, updated); }
-  async function remove(asset: MediaAsset) { if (!window.confirm(`「${asset.name}」を削除しますか？`)) return; await db.media.delete(asset.id); setWorkspace((data) => ({ ...data, media: data.media.filter((x) => x.id !== asset.id) })); }
-  function addLink(asset: MediaAsset, value: string) { const [type, id] = value.split(":") as [MediaLink["type"], string]; if (!id || asset.links.some((x) => x.type === type && x.id === id)) return; patch(asset, { links: [...asset.links, { type, id }] }); }
-  function linkLabel(link: MediaLink) { if (link.type === "lyric") return workspace.lines.find((x) => x.id === link.id)?.text || "削除済みの歌詞"; if (link.type === "association") return workspace.associations.find((x) => x.id === link.id)?.text || "削除済みの連想"; return workspace.scenes.find((x) => x.id === link.id)?.name || "削除済みの場面"; }
-  const shown = workspace.media.filter((x) => filter === "all" || x.kind === filter);
+  async function saveAsset(asset: MediaAsset) { await db.media.add(asset); setWorkspace((data) => ({ ...data, media: [asset, ...data.media] })); }
 
-  return <section className="tab-page"><div className="tab-heading"><h2>素材</h2><select value={filter} onChange={(e) => setFilter(e.target.value as typeof filter)}><option value="all">すべて</option><option value="image">画像</option><option value="audio">音声</option><option value="url">URL</option></select></div><div className="material-actions"><label><input type="file" accept="image/*" multiple onChange={(e) => addImages(e.target.files)} /><b>▧</b><span>写真から追加</span></label><label><input type="file" accept="image/*" capture="environment" onChange={(e) => addImages(e.target.files)} /><b>◎</b><span>カメラで撮影</span></label><button className={recording ? "recording" : ""} onClick={recording ? stopRecording : startRecording}><b>●</b><span>{recording ? `${recordSeconds}秒 停止` : "Safariで録音"}</span></button><label><input type="file" accept="audio/*,.m4a,.mp3,.wav,.webm,.ogg" onChange={(e) => addAudio(e.target.files?.[0])} /><b>♪</b><span>音声ファイル</span></label></div><div className="url-adder"><input inputMode="url" value={urlText} onChange={(e) => setUrlText(e.target.value)} placeholder="参考URL" /><button onClick={addUrl} disabled={!urlText}>保存</button></div>
-    <div className="material-list">{shown.map((asset) => <article key={asset.id} className={`material-card ${asset.kind}`}>{asset.kind === "image" ? <BlobImage blob={asset.blob} alt={asset.name} /> : asset.kind === "audio" ? <div className="audio-preview"><span>♪</span><BlobAudio blob={asset.blob} /></div> : <div className="url-preview">↗</div>}<div className="material-info"><input value={asset.name} onChange={(e) => patch(asset, { name: e.target.value })} aria-label="素材名" />{asset.kind === "url" ? <a href={asset.url} target="_blank" rel="noreferrer">URLを開く</a> : <small>{asset.mimeType || "形式不明"} ・ {formatBytes(asset.size)}</small>}<div className="link-chips">{asset.links.map((link) => <button key={`${link.type}:${link.id}`} title="タップで関連を解除" onClick={() => patch(asset, { links: asset.links.filter((x) => x !== link) })}>{link.type === "lyric" ? "〽" : link.type === "association" ? "◇" : "▣"} {linkLabel(link)} ×</button>)}</div><select aria-label="関連付けを追加" value="" onChange={(e) => addLink(asset, e.target.value)}><option value="">＋ 歌詞・連想・場面へ関連付け</option><optgroup label="歌詞">{workspace.lines.filter((x) => x.text).map((x) => <option key={x.id} value={`lyric:${x.id}`}>{x.text}</option>)}</optgroup><optgroup label="連想カード">{workspace.associations.filter((x) => x.text).map((x) => <option key={x.id} value={`association:${x.id}`}>{x.text}</option>)}</optgroup><optgroup label="MV場面">{workspace.scenes.map((x) => <option key={x.id} value={`scene:${x.id}`}>{x.name}</option>)}</optgroup></select></div><button className="material-delete danger-text" onClick={() => remove(asset)}>削除</button></article>)}</div>{!shown.length && <div className="empty-card"><div>▧</div><h3>素材はまだありません</h3><p>写真、録音、参考URLはすべて端末内へ保存されます。</p></div>}
-  </section>;
+  async function addImages(files?: FileList | null) {
+    if (!files) return;
+    for (const file of Array.from(files)) {
+      try { const blob = await compressImage(file); const stamp = now(); await saveAsset({ id: uid(), songId: song.id, kind: "image", name: file.name, note: "", mimeType: blob.type, blob, size: blob.size, links: [], createdAt: stamp, updatedAt: stamp }); }
+      catch (error) { notify(error instanceof Error ? error.message : "画像を保存できませんでした。"); }
+    }
+  }
+
+  async function addAudio(file?: File) {
+    if (!file) return;
+    if (!file.type.startsWith("audio/") && !/\.(m4a|mp3|wav|webm|ogg)$/i.test(file.name)) { notify("m4a、mp3、wav、webm、oggの音声ファイルを選んでください。"); return; }
+    try { const stamp = now(); await saveAsset({ id: uid(), songId: song.id, kind: "audio", name: file.name, note: "", mimeType: file.type || "audio/mpeg", blob: file, size: file.size, links: [], createdAt: stamp, updatedAt: stamp }); }
+    catch (error) { notify(error instanceof Error ? error.message : "音声を保存できませんでした。"); }
+  }
+
+  async function startRecording() {
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") { notify("この環境では直接録音できません。ボイスメモで録音し、音声ファイルとして追加してください。"); return; }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mime = ["audio/mp4", "audio/webm;codecs=opus", "audio/webm"].find((type) => MediaRecorder.isTypeSupported(type));
+      const next = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+      chunks.current = [];
+      next.ondataavailable = (event) => { if (event.data.size) chunks.current.push(event.data); };
+      next.onstop = async () => {
+        const type = next.mimeType || chunks.current[0]?.type || "audio/webm"; const blob = new Blob(chunks.current, { type }); const stamp = now();
+        try { await saveAsset({ id: uid(), songId: song.id, kind: "audio", name: `録音 ${new Date().toLocaleString("ja-JP")}`, note: "", mimeType: type, blob, size: blob.size, links: [], createdAt: stamp, updatedAt: stamp }); }
+        catch (error) { notify(error instanceof Error ? error.message : "録音を保存できませんでした。"); }
+        finally { stream.getTracks().forEach((track) => track.stop()); }
+      };
+      recorder.current = next; next.start(1000); setRecordSeconds(0); setRecording(true); timer.current = setInterval(() => setRecordSeconds((seconds) => seconds + 1), 1000);
+    } catch (error) { notify(error instanceof DOMException && error.name === "NotAllowedError" ? "マイクの使用を許可してください。" : "録音を開始できませんでした。"); }
+  }
+
+  function stopRecording() { recorder.current?.stop(); setRecording(false); if (timer.current) clearInterval(timer.current); }
+
+  async function addUrl() {
+    try { const parsed = new URL(urlText); const stamp = now(); await saveAsset({ id: uid(), songId: song.id, kind: "url", name: parsed.hostname, note: "", mimeType: "text/uri-list", size: urlText.length, url: parsed.toString(), links: [], createdAt: stamp, updatedAt: stamp }); setUrlText(""); }
+    catch { notify("http:// または https:// から始まるURLを入力してください。"); }
+  }
+
+  function patch(asset: MediaAsset, values: Partial<MediaAsset>) {
+    const updated = { ...asset, ...values, updatedAt: now() };
+    setWorkspace((data) => ({ ...data, media: data.media.map((item) => item.id === asset.id ? updated : item) }));
+    queueSave(db.media, updated);
+  }
+
+  async function remove(asset: MediaAsset) {
+    if (!window.confirm(`「${asset.name}」を削除しますか？`)) return;
+    await db.media.delete(asset.id);
+    setWorkspace((data) => ({ ...data, media: data.media.filter((item) => item.id !== asset.id), ideas: data.ideas.map((idea) => ({ ...idea, assetIds: idea.assetIds.filter((id) => id !== asset.id) })) }));
+  }
+
+  return (
+    <section className="tab-page materials-page"><div className="tab-heading"><h1>素材</h1></div><div className="material-actions"><label><input type="file" accept="image/*" multiple onChange={(event) => void addImages(event.target.files)} /><span>写真</span></label><label><input type="file" accept="image/*" capture="environment" onChange={(event) => void addImages(event.target.files)} /><span>カメラ</span></label><button className={recording ? "recording" : ""} onClick={recording ? stopRecording : startRecording}><span>{recording ? `停止 ${recordSeconds}秒` : "録音"}</span></button><label><input type="file" accept="audio/*,.m4a,.mp3,.wav,.webm,.ogg" onChange={(event) => void addAudio(event.target.files?.[0])} /><span>音声ファイル</span></label></div><div className="url-adder"><input inputMode="url" value={urlText} onChange={(event) => setUrlText(event.target.value)} placeholder="参考URL" /><button onClick={() => void addUrl()} disabled={!urlText}>追加</button></div>
+      <div className="material-list">{workspace.media.map((asset) => <article key={asset.id} className={`material-card ${asset.kind}`}>{asset.kind === "image" ? <BlobImage blob={asset.blob} alt={asset.name} /> : asset.kind === "audio" ? <div className="audio-preview"><BlobAudio blob={asset.blob} /></div> : <div className="url-preview">URL</div>}<div className="material-info"><input aria-label="素材名" value={asset.name} onChange={(event) => patch(asset, { name: event.target.value })} /><textarea aria-label="素材メモ" value={asset.note ?? ""} onChange={(event) => patch(asset, { note: event.target.value })} placeholder="メモ" />{asset.kind === "url" ? <a href={asset.url} target="_blank" rel="noreferrer">URLを開く</a> : <small>{formatBytes(asset.size)}</small>}</div><button className="material-delete danger-text" onClick={() => void remove(asset)}>削除</button></article>)}</div>
+      {workspace.media.length === 0 && <p className="plain-empty">写真・音声・URLはありません。</p>}
+      <SketchPanel {...props} />
+    </section>
+  );
 }

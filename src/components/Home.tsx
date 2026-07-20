@@ -1,61 +1,175 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createBackupBlob, inspectBackup, restoreBackup } from "../backup";
-import { db } from "../db";
+import type { ThemeMode } from "../App";
+import { db, now } from "../db";
 import { downloadBlob } from "../media";
 import type { InboxItem, Song } from "../types";
 
 type Props = {
-  songs: Song[]; inbox: InboxItem[]; onOpen(song: Song): void; onCreate(title: string): void;
-  onDelete(song: Song): void; onDuplicate(song: Song): void; onArchive(song: Song): void;
-  onQuickAdd(kind: InboxItem["kind"], text: string, file?: File): void; onRefresh(): Promise<void>; notify(message: string): void;
+  songs: Song[];
+  inbox: InboxItem[];
+  theme: ThemeMode;
+  onTheme(theme: ThemeMode): void;
+  onOpen(song: Song): void;
+  onCreate(): void;
+  onQuickAdd(text: string, files: File[]): Promise<void>;
+  onUpdateInbox(item: InboxItem): Promise<void>;
+  onDeleteInbox(item: InboxItem): Promise<void>;
+  onMoveInbox(item: InboxItem, songId: string): Promise<void>;
+  onSongFromInbox(item: InboxItem): Promise<void>;
+  onRefresh(): Promise<void>;
+  notify(message: string): void;
 };
 
-const formatDate = (date: string) => new Intl.DateTimeFormat("ja-JP", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(date));
+const formatDate = (date: string) => new Intl.DateTimeFormat("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(date));
 
 export function Home(props: Props) {
-  const [search, setSearch] = useState(""); const [sort, setSort] = useState<"updated" | "created">("updated");
-  const [showArchived, setShowArchived] = useState(false); const [newOpen, setNewOpen] = useState(false); const [title, setTitle] = useState("");
-  const [quick, setQuick] = useState<InboxItem["kind"] | null>(null); const [quickText, setQuickText] = useState(""); const [quickFile, setQuickFile] = useState<File>();
-  const [deleteTarget, setDeleteTarget] = useState<Song>(); const [backupOpen, setBackupOpen] = useState(false); const [restoreFile, setRestoreFile] = useState<File>();
-  const [restoreInfo, setRestoreInfo] = useState(""); const [restoreMode, setRestoreMode] = useState<"merge" | "replace">("merge");
+  const [text, setText] = useState("");
+  const [files, setFiles] = useState<File[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [recordSeconds, setRecordSeconds] = useState(0);
+  const [search, setSearch] = useState("");
+  const [sort, setSort] = useState<"updated" | "created">("updated");
+  const [archiveView, setArchiveView] = useState<"active" | "archived" | "all">("active");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [restoreFile, setRestoreFile] = useState<File>();
+  const [restoreInfo, setRestoreInfo] = useState("");
+  const [restoreMode, setRestoreMode] = useState<"merge" | "replace">("merge");
+  const [lastBackupAt, setLastBackupAt] = useState<string>();
+  const [undo, setUndo] = useState<InboxItem>();
+  const [selectedSongs, setSelectedSongs] = useState<Record<string, string>>({});
+  const imageInput = useRef<HTMLInputElement>(null);
   const restoreInput = useRef<HTMLInputElement>(null);
-  const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent); const standalone = window.matchMedia("(display-mode: standalone)").matches || Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
+  const recorder = useRef<MediaRecorder | undefined>(undefined);
+  const chunks = useRef<Blob[]>([]);
+  const recordingTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+  const deleteTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const standalone = window.matchMedia("(display-mode: standalone)").matches || Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
 
-  const visibleSongs = useMemo(() => props.songs.filter((song) => song.archived === showArchived && `${song.title} ${song.workingTitle} ${song.tags.join(" ")}`.toLowerCase().includes(search.toLowerCase())).sort((a, b) => sort === "updated" ? b.updatedAt.localeCompare(a.updatedAt) : b.createdAt.localeCompare(a.createdAt)), [props.songs, search, sort, showArchived]);
+  useEffect(() => {
+    void db.meta.get("lastBackupAt").then((item) => setLastBackupAt(typeof item?.value === "string" ? item.value : undefined));
+    return () => { if (recordingTimer.current) clearInterval(recordingTimer.current); if (deleteTimer.current) clearTimeout(deleteTimer.current); recorder.current?.stream.getTracks().forEach((track) => track.stop()); };
+  }, []);
+
+  const visibleSongs = useMemo(() => props.songs
+    .filter((song) => archiveView === "all" || song.archived === (archiveView === "archived"))
+    .filter((song) => `${song.title} ${song.tags.join(" ")}`.toLowerCase().includes(search.toLowerCase()))
+    .sort((a, b) => sort === "updated" ? b.updatedAt.localeCompare(a.updatedAt) : b.createdAt.localeCompare(a.createdAt)), [props.songs, search, sort, archiveView]);
+
+  async function saveMemo() {
+    if (!text.trim() && files.length === 0) return;
+    setSaving(true);
+    try { await props.onQuickAdd(text, files); setText(""); setFiles([]); }
+    finally { setSaving(false); }
+  }
+
+  async function startRecording() {
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") { props.notify("この環境では直接録音できません。素材画面から音声ファイルを追加してください。"); return; }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const supported = ["audio/mp4", "audio/webm;codecs=opus", "audio/webm"].find((type) => MediaRecorder.isTypeSupported(type));
+      const next = supported ? new MediaRecorder(stream, { mimeType: supported }) : new MediaRecorder(stream);
+      chunks.current = [];
+      next.ondataavailable = (event) => { if (event.data.size) chunks.current.push(event.data); };
+      next.onstop = () => {
+        const mime = next.mimeType || chunks.current[0]?.type || "audio/webm";
+        const extension = mime.includes("mp4") ? "m4a" : "webm";
+        const blob = new Blob(chunks.current, { type: mime });
+        setFiles((current) => [...current, new File([blob], `録音-${Date.now()}.${extension}`, { type: mime })]);
+        stream.getTracks().forEach((track) => track.stop());
+      };
+      recorder.current = next;
+      next.start(1000);
+      setRecordSeconds(0); setRecording(true);
+      recordingTimer.current = setInterval(() => setRecordSeconds((value) => value + 1), 1000);
+    } catch (error) { props.notify(error instanceof DOMException && error.name === "NotAllowedError" ? "マイクの使用を許可してください。" : "録音を開始できませんでした。"); }
+  }
+
+  function stopRecording() {
+    recorder.current?.stop(); setRecording(false);
+    if (recordingTimer.current) clearInterval(recordingTimer.current);
+  }
+
+  async function removeMemo(item: InboxItem) {
+    if (deleteTimer.current && undo) await props.onDeleteInbox(undo);
+    const deleted = { ...item, deletedAt: now(), updatedAt: now() };
+    await props.onUpdateInbox(deleted); setUndo(deleted);
+    deleteTimer.current = setTimeout(() => { void props.onDeleteInbox(deleted); setUndo(undefined); }, 6000);
+  }
+
+  async function undoDelete() {
+    if (!undo) return;
+    if (deleteTimer.current) clearTimeout(deleteTimer.current);
+    const restored = { ...undo, deletedAt: undefined, updatedAt: now() };
+    await props.onUpdateInbox(restored); setUndo(undefined);
+  }
 
   async function exportBackup() {
-    try { const { blob, manifest } = await createBackupBlob(); downloadBlob(blob, `アートメモバックアップ-${manifest.createdAt.slice(0, 10)}.zip`); props.notify("バックアップを書き出しました。iPhoneでは共有メニューからファイルに保存できます。"); }
-    catch (error) { props.notify(error instanceof Error ? error.message : "バックアップに失敗しました。"); }
+    try {
+      const { blob, manifest } = await createBackupBlob();
+      downloadBlob(blob, `アートメモバックアップ-${manifest.createdAt.slice(0, 10)}.zip`);
+      setLastBackupAt(manifest.createdAt); props.notify("バックアップを書き出しました。");
+    } catch (error) { props.notify(error instanceof Error ? error.message : "バックアップに失敗しました。"); }
   }
 
   async function chooseRestore(file?: File) {
-    if (!file) return; setRestoreFile(file);
-    try { const info = await inspectBackup(file); setRestoreInfo(`${new Date(info.createdAt).toLocaleString("ja-JP")}／${info.counts.songs}曲／素材${info.counts.media}件`); }
+    if (!file) return;
+    try { const info = await inspectBackup(file); setRestoreFile(file); setRestoreInfo(`${new Date(info.createdAt).toLocaleString("ja-JP")}／${info.counts.songs}曲／素材${info.counts.media}件`); }
     catch (error) { setRestoreFile(undefined); setRestoreInfo(""); props.notify(error instanceof Error ? error.message : "バックアップを検証できませんでした。"); }
   }
 
   async function runRestore() {
     if (!restoreFile) return;
-    if (restoreMode === "replace" && !window.confirm("現在の全データを削除し、バックアップの内容に完全に置き換えます。元に戻せません。続けますか？")) return;
-    try { await restoreBackup(restoreFile, restoreMode); await props.onRefresh(); setBackupOpen(false); setRestoreFile(undefined); props.notify(restoreMode === "merge" ? "バックアップを追加しました。" : "バックアップから完全に復元しました。"); }
+    if (restoreMode === "replace" && !window.confirm("現在の全データを削除し、バックアップの内容に置き換えます。続けますか？")) return;
+    try { await restoreBackup(restoreFile, restoreMode); await props.onRefresh(); setSettingsOpen(false); props.notify("復元しました。"); }
     catch (error) { props.notify(error instanceof Error ? error.message : "復元に失敗しました。"); }
   }
 
   return (
     <main className="home-shell">
-      <header className="home-header"><div className="brand"><h1>アートメモ</h1></div><div className="header-buttons"><button className="icon-button" onClick={() => setBackupOpen(true)} aria-label="バックアップ">⇩</button><button className="primary compact" aria-label="新しい曲" onClick={() => setNewOpen(true)}>＋ 新しい曲</button></div></header>
-      {isIos && !standalone && <div className="install-tip"><span>ホーム画面に追加</span><p>Safariの共有 <b>□↑</b> →「ホーム画面に追加」</p><button aria-label="案内を閉じる" onClick={(e) => e.currentTarget.parentElement?.remove()}>×</button></div>}
-      <section className="quick-section"><div className="section-heading"><h2>クイック追加</h2><span>受信箱 {props.inbox.length}</span></div><div className="quick-grid">{([ ["lyric", "歌詞"], ["mv", "MV案"], ["audio", "音声"], ["image", "画像"] ] as const).map(([kind, label]) => <button key={kind} onClick={() => setQuick(kind)}><b>{kind === "lyric" ? "〽" : kind === "mv" ? "▣" : kind === "audio" ? "●" : "▧"}</b><span>{label}</span></button>)}</div></section>
-      {props.inbox.length > 0 && <details className="inbox-panel"><summary>受信箱 <span>{props.inbox.length}</span></summary><div>{props.inbox.map((item) => <article key={item.id}><i>{item.kind === "lyric" ? "歌詞" : item.kind === "mv" ? "MV" : item.kind === "audio" ? "音声" : "画像"}</i><p>{item.text || "添付ファイル"}</p><time>{formatDate(item.createdAt)}</time><button aria-label="受信箱から削除" onClick={async () => { if (window.confirm("受信箱から削除しますか？")) { await db.inbox.delete(item.id); await props.onRefresh(); } }}>×</button></article>)}</div></details>}
-      <section className="library-section"><div className="section-heading library-title"><h2>{showArchived ? "アーカイブ" : "曲一覧"}</h2><span>{visibleSongs.length} 曲</span></div><div className="library-tools"><label className="search"><span>⌕</span><input aria-label="曲名検索" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="曲名・仮タイトル・タグを検索" /></label><select aria-label="並べ替え" value={sort} onChange={(e) => setSort(e.target.value as "updated" | "created")}><option value="updated">更新日時順</option><option value="created">作成日時順</option></select><button className="text-button" onClick={() => setShowArchived((v) => !v)}>{showArchived ? "曲一覧" : "アーカイブ"}</button></div>
-        {visibleSongs.length ? <div className="song-grid">{visibleSongs.map((song) => <article className="song-card" key={song.id} style={{ "--song-color": song.color } as React.CSSProperties}><button className="song-open" onClick={() => props.onOpen(song)}><div className="song-card-top"><span className="stage">{song.stage}</span><time>{formatDate(song.updatedAt)}</time></div><h3>{song.title || "無題の曲"}</h3>{song.workingTitle && <p className="working-title">仮タイトル：{song.workingTitle}</p>}<div className="tag-row">{song.tags.slice(0, 3).map((tag) => <span key={tag}>#{tag}</span>)}</div></button><details className="card-menu"><summary aria-label="曲の操作">•••</summary><div><button onClick={() => props.onDuplicate(song)}>複製</button><button onClick={() => props.onArchive(song)}>{song.archived ? "曲一覧に戻す" : "アーカイブ"}</button><button className="danger-text" onClick={() => setDeleteTarget(song)}>削除</button></div></details></article>)}</div> : <div className="empty-card"><h3>{search ? "該当する曲がありません" : showArchived ? "アーカイブは空です" : "曲がありません"}</h3><p>{search ? "検索条件を変更してください。" : showArchived ? "アーカイブした曲がここに表示されます。" : "「新しい曲」から作成してください。"}</p>{!search && !showArchived && <button className="primary" onClick={() => setNewOpen(true)}>新しい曲を作る</button>}</div>}
-      </section>
-      <footer className="home-footer"><span>保存先：この端末</span><small>外部送信なし</small></footer>
+      <header className="home-header"><h1>アートメモ</h1><button className="icon-button" onClick={() => setSettingsOpen(true)} aria-label="全体設定">設定</button></header>
+      {isIos && !standalone && <div className="install-tip keyboard-hide"><p>共有ボタン →「ホーム画面に追加」でアプリとして使えます。</p><button aria-label="案内を閉じる" onClick={(event) => event.currentTarget.parentElement?.remove()}>×</button></div>}
 
-      {newOpen && <div className="modal-backdrop"><form className="modal" onSubmit={(e) => { e.preventDefault(); props.onCreate(title); setTitle(""); setNewOpen(false); }}><h2>新しい曲</h2><label>曲名<input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} /></label><div className="modal-actions"><button type="button" onClick={() => setNewOpen(false)}>キャンセル</button><button className="primary">作成</button></div></form></div>}
-      {quick && <div className="modal-backdrop"><form className="modal" onSubmit={(e) => { e.preventDefault(); props.onQuickAdd(quick, quickText, quickFile); setQuick(null); setQuickText(""); setQuickFile(undefined); }}><h2>{quick === "lyric" ? "歌詞を追加" : quick === "mv" ? "MV案を追加" : quick === "audio" ? "音声を追加" : "画像を追加"}</h2>{quick === "lyric" || quick === "mv" ? <textarea autoFocus value={quickText} onChange={(e) => setQuickText(e.target.value)} placeholder="内容を入力" /> : <><label className="file-picker"><input type="file" accept={quick === "audio" ? "audio/*" : "image/*"} capture={quick === "image" ? "environment" : undefined} onChange={(e) => setQuickFile(e.target.files?.[0])} />{quickFile?.name || (quick === "audio" ? "音声ファイルを選択" : "写真を選択・撮影")}</label><input value={quickText} onChange={(e) => setQuickText(e.target.value)} placeholder="メモ（任意）" /></>}<div className="modal-actions"><button type="button" onClick={() => setQuick(null)}>キャンセル</button><button className="primary" disabled={!quickText.trim() && !quickFile}>受信箱に保存</button></div></form></div>}
-      {deleteTarget && <div className="modal-backdrop"><div className="modal confirm"><div className="warning-mark">!</div><h2>「{deleteTarget.title}」を削除しますか？</h2><p>歌詞、素材、スケッチも端末から削除されます。必要なら先にバックアップしてください。</p><div className="modal-actions"><button onClick={() => setDeleteTarget(undefined)}>やめる</button><button className="danger" onClick={() => { props.onDelete(deleteTarget); setDeleteTarget(undefined); }}>削除する</button></div></div></div>}
-      {backupOpen && <div className="modal-backdrop"><div className="modal backup-modal"><h2>バックアップ</h2><p>すべての曲・画像・音声・スケッチを、ひとつのZIPにまとめます。</p><button className="primary full" onClick={exportBackup}>バックアップを書き出す</button><hr /><h3>バックアップから復元</h3><button className="file-picker" onClick={() => restoreInput.current?.click()}>{restoreFile?.name || "ZIPファイルを選択"}</button><input ref={restoreInput} hidden type="file" accept=".zip,application/zip" onChange={(e) => chooseRestore(e.target.files?.[0])} />{restoreInfo && <><p className="restore-info">検証済み：{restoreInfo}</p><div className="segmented"><button className={restoreMode === "merge" ? "active" : ""} onClick={() => setRestoreMode("merge")}>既存データに追加</button><button className={restoreMode === "replace" ? "active" : ""} onClick={() => setRestoreMode("replace")}>すべて置き換え</button></div><button className={restoreMode === "replace" ? "danger full" : "primary full"} onClick={runRestore}>復元</button></>}<button className="text-button full" onClick={() => setBackupOpen(false)}>閉じる</button></div></div>}
+      <section className="quick-composer">
+        <h2>クイック追加</h2>
+        <textarea aria-label="クイック追加のメモ" value={text} onChange={(event) => setText(event.target.value)} placeholder="" rows={7} />
+        {files.length > 0 && <ul className="attachment-list">{files.map((file, index) => <li key={`${file.name}-${index}`}><span>{file.name}</span><button onClick={() => setFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))} aria-label={`${file.name}を外す`}>×</button></li>)}</ul>}
+        <div className="quick-actions keyboard-hide">
+          <button className={recording ? "recording" : ""} onClick={recording ? stopRecording : startRecording}>{recording ? `録音停止 ${recordSeconds}秒` : "音声録音"}</button>
+          <button onClick={() => imageInput.current?.click()}>画像追加</button>
+          <input ref={imageInput} hidden type="file" accept="image/*" multiple onChange={(event) => { if (event.target.files) setFiles((current) => [...current, ...Array.from(event.target.files!)]); event.target.value = ""; }} />
+          <button className="primary" disabled={saving || (!text.trim() && files.length === 0)} onClick={saveMemo}>{saving ? "保存中" : "保存"}</button>
+        </div>
+      </section>
+
+      <section className="memo-section">
+        <div className="section-heading"><h2>未整理メモ</h2><span>{props.inbox.length}</span></div>
+        <div className="memo-list">{props.inbox.map((item) => <article className="memo-card" key={item.id}>
+          <textarea aria-label="未整理メモの内容" value={item.text} onChange={(event) => void props.onUpdateInbox({ ...item, text: event.target.value, updatedAt: now() })} />
+          {(item.assetIds?.length || item.assetId) && <small>添付あり</small>}
+          <time>{formatDate(item.updatedAt ?? item.createdAt)}</time>
+          <div className="memo-actions">
+            <select aria-label="移動先の曲" value={selectedSongs[item.id] ?? ""} onChange={(event) => setSelectedSongs((current) => ({ ...current, [item.id]: event.target.value }))}><option value="">既存の曲を選択</option>{props.songs.filter((song) => !song.archived).map((song) => <option key={song.id} value={song.id}>{song.title}</option>)}</select>
+            <button disabled={!selectedSongs[item.id]} onClick={() => void props.onMoveInbox(item, selectedSongs[item.id])}>曲へ入れる</button>
+            <button onClick={() => void props.onSongFromInbox(item)}>新しい曲にする</button>
+            <button className="danger-text" onClick={() => void removeMemo(item)}>削除</button>
+          </div>
+        </article>)}</div>
+        {props.inbox.length === 0 && <p className="plain-empty">未整理メモはありません。</p>}
+      </section>
+
+      <section className="library-section">
+        <div className="section-heading"><h2>曲一覧</h2><button className="primary compact" onClick={props.onCreate}>＋ 新しい曲</button></div>
+        <details className="filter-menu"><summary>検索・並べ替え・アーカイブ</summary><div><input aria-label="曲名検索" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="曲名を検索" /><select aria-label="並べ替え" value={sort} onChange={(event) => setSort(event.target.value as typeof sort)}><option value="updated">更新日時順</option><option value="created">作成日時順</option></select><select aria-label="表示する曲" value={archiveView} onChange={(event) => setArchiveView(event.target.value as typeof archiveView)}><option value="active">通常の曲</option><option value="archived">アーカイブ</option><option value="all">すべて</option></select></div></details>
+        <div className="song-list">{visibleSongs.map((song) => <button className="song-row" key={song.id} onClick={() => props.onOpen(song)}><span><b>{song.title || "無題の曲"}</b><small>{song.stage}</small></span><time>{formatDate(song.updatedAt)}</time><i aria-hidden="true">›</i></button>)}</div>
+        {visibleSongs.length === 0 && <p className="plain-empty">曲はありません。</p>}
+      </section>
+
+      {undo && <div className="undo-bar keyboard-hide">メモを削除しました<button onClick={() => void undoDelete()}>元に戻す</button></div>}
+
+      {settingsOpen && <div className="modal-backdrop"><div className="modal settings-modal"><div className="modal-title"><h2>全体設定</h2><button onClick={() => setSettingsOpen(false)} aria-label="閉じる">×</button></div><h3>表示</h3><div className="segmented"><button className={props.theme === "system" ? "active" : ""} onClick={() => props.onTheme("system")}>端末設定</button><button className={props.theme === "light" ? "active" : ""} onClick={() => props.onTheme("light")}>ライト</button><button className={props.theme === "dark" ? "active" : ""} onClick={() => props.onTheme("dark")}>ダーク</button></div><hr /><h3>バックアップ</h3>{lastBackupAt && <p>最終バックアップ：{new Date(lastBackupAt).toLocaleString("ja-JP")}</p>}<button className="primary full" onClick={exportBackup}>書き出す</button><button className="file-picker full" onClick={() => restoreInput.current?.click()}>{restoreFile?.name || "バックアップを選択"}</button><input ref={restoreInput} hidden type="file" accept=".zip,application/zip" onChange={(event) => void chooseRestore(event.target.files?.[0])} />{restoreInfo && <><p className="restore-info">検証済み：{restoreInfo}</p><div className="segmented"><button className={restoreMode === "merge" ? "active" : ""} onClick={() => setRestoreMode("merge")}>追加</button><button className={restoreMode === "replace" ? "active" : ""} onClick={() => setRestoreMode("replace")}>置き換え</button></div><button className={restoreMode === "replace" ? "danger full" : "primary full"} onClick={runRestore}>復元</button></>}</div></div>}
     </main>
   );
 }
