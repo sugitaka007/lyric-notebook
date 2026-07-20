@@ -29,13 +29,20 @@ export interface MVScene {
   createdAt: string; updatedAt: string;
 }
 export interface Idea {
-  id: string; songId: string; text: string; category?: IdeaCategory; pinned: boolean; assetIds: string[];
+  id: string; songId: string; text: string; category?: IdeaCategory; pinned?: boolean; assetIds: string[];
   sourceExcerpt?: string; legacyAssociationId?: string; legacySceneId?: string; createdAt: string; updatedAt: string;
 }
 export interface Point { x: number; y: number; }
 export interface Stroke { tool: "pen" | "eraser"; color: string; width: number; points: Point[]; }
+export type SketchTextSize = "small" | "medium" | "large";
+export interface SketchTextElement { id: string; text: string; position: Point; color: string; size: SketchTextSize; }
+export interface SketchArrowElement { id: string; start: Point; end: Point; color: string; width: number; }
+export type SketchPromptKey = "subject" | "action" | "composition" | "background" | "lighting" | "colors" | "mood" | "style" | "include" | "exclude";
+export type SketchPromptFields = Partial<Record<SketchPromptKey, string>>;
 export interface SketchRecord {
   id: string; songId: string; name: string; aspect: AspectRatio; strokes: Stroke[];
+  texts?: SketchTextElement[]; arrows?: SketchArrowElement[]; guideVisible?: boolean; guideInExport?: boolean;
+  backgroundColor?: string; promptFields?: SketchPromptFields;
   previewBlob?: Blob; underlayBlob?: Blob; relatedLyricId?: string; relatedSceneId?: string;
   createdAt: string; updatedAt: string;
 }

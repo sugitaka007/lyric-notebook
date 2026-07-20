@@ -1,6 +1,6 @@
 import Dexie from "dexie";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { createSong, db, deleteSongCascade, loadWorkspace, LyricDatabase, moveInboxToSong, moveOrdered, now, STORES_V2, uid } from "../src/db";
+import { createSong, db, deleteSongCascade, loadWorkspace, LyricDatabase, moveInboxToSong, moveOrdered, now, STORES_V2, STORES_V3, uid } from "../src/db";
 import type { InboxItem, MVScene, SketchRecord, Song } from "../src/types";
 
 beforeEach(async () => { await db.delete(); await db.open(); });
@@ -66,6 +66,18 @@ describe("データベース更新", () => {
     await migrated.songs.add({ ...oldSong, id: uid(), title: "更新後の曲", workingTitle: "", summary: "", protagonist: "", counterpart: "", place: "", time: "", perspective: "", baseColor: "#ffd60a", repeatedWords: "", repeatedObjects: "", avoidExpressions: "", lastingEmotion: "", color: "#ffd60a" });
     migrated.close(); await migrated.open();
     expect(await migrated.songs.count()).toBe(1);
+    await migrated.delete();
+  });
+
+  it("v3からv4への更新では本文とスケッチを残し、不要なアイデア情報だけ除く", async () => {
+    const name = `preserve-${uid()}`; const legacy = new Dexie(name); legacy.version(3).stores(STORES_V3); const stamp = now();
+    const song = { id: uid(), title: "保持する曲", stage: "種", tags: [], archived: false, createdAt: stamp, updatedAt: stamp } as unknown as Song;
+    await legacy.table("songs").add(song);
+    await legacy.table("ideas").add({ id: "idea", songId: song.id, text: "残す本文", pinned: true, sourceExcerpt: "旧関連", assetIds: [], createdAt: stamp, updatedAt: stamp });
+    await legacy.table("sketches").add({ id: "sketch", songId: song.id, name: "構図", aspect: "16:9", strokes: [], createdAt: stamp, updatedAt: stamp }); legacy.close();
+    const migrated = new LyricDatabase(name); await migrated.open();
+    expect(await migrated.songs.count()).toBe(1); const idea = await migrated.ideas.get("idea"); expect(idea?.text).toBe("残す本文"); expect(idea?.pinned).toBeUndefined(); expect(idea?.sourceExcerpt).toBeUndefined();
+    const sketch = await migrated.sketches.get("sketch"); expect(sketch?.texts).toEqual([]); expect(sketch?.arrows).toEqual([]); expect(sketch?.guideVisible).toBe(true);
     await migrated.delete();
   });
 });

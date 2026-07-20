@@ -131,10 +131,12 @@ export async function inspectBackup(file: Blob) { return (await parseBackup(file
 export async function restoreBackup(file: Blob, mode: "merge" | "replace") {
   const parsed = await parseBackup(file);
   const data = mode === "merge" ? remapForMerge(parsed.data) : parsed.data;
+  const currentSettings = await db.meta.get("settings");
   await db.transaction("rw", db.tables, async () => {
     if (mode === "replace") await Promise.all(db.tables.map((table) => table.clear()));
     await db.songs.bulkPut(data.songs); await db.sections.bulkPut(data.sections); await db.lyricLines.bulkPut(data.lyricLines); await db.ideas.bulkPut(data.ideas);
     await db.associations.bulkPut(data.associations); await db.mvScenes.bulkPut(data.mvScenes); await db.sketches.bulkPut(data.sketches); await db.media.bulkPut(data.media); await db.inbox.bulkPut(data.inbox);
+    if (currentSettings) await db.meta.put(currentSettings);
     await db.meta.put({ key: "lastRestoreAt", value: now() });
   });
   await normalizeRestoredData();

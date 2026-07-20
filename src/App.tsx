@@ -6,10 +6,10 @@ import type { InboxItem, MediaAsset, Song, SongWorkspace } from "./types";
 import { EMPTY_WORKSPACE } from "./types";
 import { Home } from "./components/Home";
 import { SongEditor, type SongTab } from "./components/SongEditor";
+import { DEFAULT_SETTINGS, normalizeSettings, type AppSettings } from "./settings";
 
 export type SaveState = "saved" | "saving" | "error";
 export type QueueSave = (table: Table, value: { id?: string; key?: string; songId?: string; updatedAt?: string }) => void;
-export type ThemeMode = "system" | "light" | "dark";
 
 export default function App() {
   const [songs, setSongs] = useState<Song[]>([]);
@@ -22,7 +22,7 @@ export default function App() {
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const [notice, setNotice] = useState("");
   const [online, setOnline] = useState(navigator.onLine);
-  const [theme, setThemeState] = useState<ThemeMode>("system");
+  const [settings, setSettingsState] = useState<AppSettings>(DEFAULT_SETTINGS);
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
 
   const refreshHome = useCallback(async () => {
@@ -34,11 +34,10 @@ export default function App() {
   useEffect(() => {
     let mounted = true;
     const pendingTimers = timers.current;
-    Promise.all([refreshHome(), db.meta.get("theme")])
-      .then(([, stored]) => {
+    Promise.all([refreshHome(), db.meta.get("settings"), db.meta.get("theme")])
+      .then(([, stored, legacyTheme]) => {
         if (!mounted) return;
-        const value = stored?.value;
-        if (value === "light" || value === "dark" || value === "system") setThemeState(value);
+        setSettingsState(normalizeSettings(stored?.value, legacyTheme?.value));
         setReady(true);
       })
       .catch((error) => { setNotice(storageErrorMessage(error)); setReady(true); });
@@ -50,9 +49,14 @@ export default function App() {
   }, [refreshHome]);
 
   useEffect(() => {
-    if (theme === "system") document.documentElement.removeAttribute("data-theme");
-    else document.documentElement.dataset.theme = theme;
-  }, [theme]);
+    if (settings.theme === "system") document.documentElement.removeAttribute("data-theme");
+    else document.documentElement.dataset.theme = settings.theme;
+    document.documentElement.dataset.fontSize = settings.fontSize;
+    document.documentElement.style.setProperty("--accent", settings.accentColor);
+    document.documentElement.style.setProperty("--accent-2", settings.accentColor);
+    document.documentElement.style.setProperty("--accent-fill", settings.accentColor);
+    document.documentElement.style.setProperty("--accent-soft", `color-mix(in srgb, ${settings.accentColor} 18%, transparent)`);
+  }, [settings]);
 
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(""), 5200); return () => clearTimeout(timer); }, [notice]);
 
@@ -138,7 +142,16 @@ export default function App() {
     queueSave(db.songs, updated);
   }
 
-  async function setTheme(next: ThemeMode) { setThemeState(next); await db.meta.put({ key: "theme", value: next }); }
+  async function updateSettings(patch: Partial<AppSettings>) {
+    const next = normalizeSettings({ ...settings, ...patch });
+    setSettingsState(next);
+    await db.meta.put({ key: "settings", value: next });
+  }
+
+  async function resetAllData() {
+    await db.transaction("rw", db.tables, async () => { await Promise.all(db.tables.map((table) => table.clear())); await db.meta.put({ key: "settings", value: DEFAULT_SETTINGS }); });
+    setSettingsState(DEFAULT_SETTINGS); setActiveSong(null); setWorkspace(EMPTY_WORKSPACE); await refreshHome();
+  }
 
   if (!ready) return <div className="launch-screen"><span aria-hidden="true" /><p>アートメモを起動中…</p></div>;
 
@@ -146,9 +159,9 @@ export default function App() {
     <div className="app" data-online={online}>
       {!online && <div className="offline-banner" role="status">オフライン</div>}
       {activeSong ? (
-        <SongEditor song={activeSong} workspace={workspace} setWorkspace={setWorkspace} patchSong={patchSong} queueSave={queueSave} saveState={saveState} initialTab={initialTab} focusTitle={focusSongTitle} onDelete={removeSong} onBack={async () => { setActiveSong(null); await refreshHome(); }} notify={setNotice} />
+        <SongEditor song={activeSong} workspace={workspace} setWorkspace={setWorkspace} settings={settings} patchSong={patchSong} queueSave={queueSave} saveState={saveState} initialTab={initialTab} focusTitle={focusSongTitle} onDelete={removeSong} onBack={async () => { setActiveSong(null); await refreshHome(); }} notify={setNotice} />
       ) : (
-        <Home songs={songs} inbox={inbox} theme={theme} onTheme={setTheme} onOpen={openSong} onCreate={addSong} onQuickAdd={addInbox} onUpdateInbox={updateInbox} onDeleteInbox={deleteInbox} onMoveInbox={moveInbox} onSongFromInbox={songFromInbox} onRefresh={refreshHome} notify={setNotice} />
+        <Home songs={songs} inbox={inbox} settings={settings} onSettings={updateSettings} onResetAll={resetAllData} onOpen={openSong} onCreate={addSong} onQuickAdd={addInbox} onUpdateInbox={updateInbox} onDeleteInbox={deleteInbox} onMoveInbox={moveInbox} onSongFromInbox={songFromInbox} onRefresh={refreshHome} notify={setNotice} />
       )}
       {notice && <div className="toast" role="status">{notice}</div>}
     </div>

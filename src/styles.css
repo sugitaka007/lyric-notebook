@@ -470,7 +470,6 @@ h1,h2,h3 { font-family:inherit; letter-spacing:0; }
 .idea-options { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:6px; }
 .idea-list { display:grid; gap:10px; margin-top:14px; }
 .idea-card { overflow:hidden; border:1px solid var(--line); border-radius:10px; background:var(--paper); }
-.idea-card.pinned { border-left:4px solid var(--accent-fill); }
 .idea-card>summary { display:grid; gap:3px; min-height:54px; padding:8px 10px; cursor:pointer; list-style:none; }
 .idea-card>summary span,.idea-card>summary small { color:var(--muted); font-size:10px; }
 .idea-card>summary b { display:-webkit-box; overflow:hidden; font-size:15px; font-weight:500; line-height:1.35; white-space:pre-wrap; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
@@ -517,6 +516,83 @@ h1,h2,h3 { font-family:inherit; letter-spacing:0; }
 .reference-panel .url-adder { margin:0 8px 8px; }
 .reference-link { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; min-height:44px; padding:3px 8px; border-top:1px solid var(--line); }
 .reference-link a { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* GPT用コピーと設定 */
+:root[data-font-size="small"] body { font-size:14px; }
+:root[data-font-size="large"] body { font-size:18px; }
+:root[data-font-size="large"] .memo-card>summary span,
+:root[data-font-size="large"] .idea-card>summary b,
+:root[data-font-size="large"] .song-row b { font-size:17px; }
+.copy-link { width:100%; margin-top:8px; border-color:transparent; background:transparent; color:var(--accent); font-size:13px; }
+.sheet-backdrop { position:fixed; z-index:260; inset:0; display:flex; align-items:flex-end; background:rgba(0,0,0,.55); }
+.copy-sheet { width:100%; max-height:min(82dvh,720px); padding:8px 14px calc(14px + env(safe-area-inset-bottom)); overflow-y:auto; border:1px solid var(--line); border-bottom:0; border-radius:16px 16px 0 0; background:var(--paper); }
+.copy-sheet .modal-title { margin-bottom:12px; }
+.copy-sheet h2 { margin:0; font-size:20px; }
+.sheet-handle { width:38px; height:5px; margin:0 auto 10px; border-radius:99px; background:var(--line); }
+.copy-sheet fieldset,.settings-group fieldset { margin:0 0 14px; padding:0; border:0; }
+.copy-sheet legend,.settings-group legend { margin-bottom:7px; color:var(--muted); font-size:12px; font-weight:700; }
+.check-list { display:grid; gap:1px; overflow:hidden; border:1px solid var(--line); border-radius:9px; background:var(--line); }
+.check-list label { display:grid; min-height:44px; grid-template-columns:30px minmax(0,1fr); align-items:center; gap:5px; padding:7px 9px; background:var(--paper); color:var(--ink); font-size:14px; }
+.check-list input { width:24px; min-height:24px; margin:0; }
+.check-list span { overflow-wrap:anywhere; white-space:pre-wrap; }
+.prompt-preview { display:block; margin:12px 0; }
+.prompt-preview>span { display:block; margin-bottom:5px; color:var(--muted); font-size:12px; }
+.prompt-preview textarea { min-height:180px; background:var(--paper-2); font-size:14px; line-height:1.55; }
+.settings-modal { padding:16px; }
+.settings-group { border-top:1px solid var(--line); }
+.settings-group:last-child { border-bottom:1px solid var(--line); }
+.settings-group>summary { min-height:50px; padding:14px 2px; cursor:pointer; font-size:16px; font-weight:700; list-style:none; }
+.settings-group>summary::after { float:right; color:var(--muted); content:"＋"; }
+.settings-group[open]>summary::after { content:"−"; }
+.settings-group>label,.settings-group>fieldset,.settings-group>button,.settings-group>p,.settings-group>.segmented { margin-bottom:11px; }
+.settings-group>label { display:grid!important; grid-template-columns:minmax(0,1fr) minmax(120px,46%); align-items:center; gap:10px; color:var(--ink)!important; font-size:13px!important; }
+.settings-group>label>select { min-width:0; }
+.settings-group .switch-row { display:flex!important; }
+.setting-color input { justify-self:end; width:58px; padding:4px; }
+.idea-options.single { grid-template-columns:1fr; }
+
+/* 画像生成向けスケッチ */
+.canvas-editor { padding:10px; }
+.sketch-name-row { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:6px; }
+.canvas-icon-toolbar { display:flex; gap:2px; }
+.canvas-icon-toolbar button { width:44px; min-width:44px; height:44px; padding:0; font-size:22px; }
+.canvas-tools { display:grid; grid-template-columns:repeat(5,1fr); gap:4px; margin:8px 0; }
+.canvas-tools button { display:grid; min-width:0; min-height:52px; place-content:center; padding:2px; font-size:21px; line-height:1; }
+.canvas-tools button span { margin-top:4px; font-size:9px; }
+.canvas-tools button.active { border-color:var(--accent-fill); background:var(--accent-fill); color:#111; }
+.drawing-options { display:grid; grid-template-columns:70px minmax(0,1fr) 78px; gap:8px; margin-bottom:8px; }
+.drawing-options label { display:grid; grid-template-columns:auto 1fr; align-items:center; gap:6px; color:var(--muted); font-size:11px; }
+.drawing-options input[type="color"] { padding:4px; }
+.guide-row { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:8px 0; }
+.guide-row .switch-row { padding:0 8px; border:1px solid var(--line); border-radius:9px; background:var(--paper); font-size:11px; }
+.canvas-wrap { position:relative; overflow:hidden; width:100%; border:1px solid var(--line); border-radius:4px; background:#fff; touch-action:none; }
+.canvas-wrap canvas { display:block; width:100%; height:100%; touch-action:none; }
+.element-editor { display:grid; grid-template-columns:auto minmax(0,1fr) auto auto auto; align-items:center; gap:5px; margin-top:8px; padding:8px; border:1px solid var(--line); border-radius:9px; background:var(--paper-2); }
+.element-editor strong { font-size:12px; }
+.element-editor input,.element-editor select,.element-editor button { min-width:44px; }
+.element-editor input[type="color"] { width:48px; padding:4px; }
+.element-editor .segmented { min-width:170px; }
+.sketch-prompt-fields { margin-top:12px; border:1px solid var(--line); border-radius:9px; background:var(--paper); }
+.sketch-prompt-fields>summary { min-height:46px; padding:13px; cursor:pointer; list-style:none; }
+.sketch-prompt-fields>div { display:grid; gap:9px; padding:0 10px 10px; }
+.sketch-prompt-fields label { color:var(--muted); font-size:11px; }
+.sketch-prompt-fields textarea { min-height:66px; margin-top:4px; font-size:16px; }
+.canvas-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px; }
+.canvas-actions button { min-height:50px; padding:6px; font-size:12px; }
+.sketch-delete { width:100%; margin-top:10px; }
+.text-entry-backdrop { align-items:flex-start; padding-top:calc(18px + env(safe-area-inset-top)); }
+.text-entry { max-height:calc(100dvh - 36px - env(safe-area-inset-top)); }
+.text-entry>input { margin-bottom:12px; }
+
+@media (max-width:430px) {
+  .copy-sheet { max-height:88dvh; }
+  .idea-controls { grid-template-columns:1fr 1fr; }
+  .idea-controls select { grid-column:1/-1; }
+  .canvas-icon-toolbar { display:grid; grid-template-columns:repeat(2,44px); }
+  .element-editor { grid-template-columns:1fr 1fr; }
+  .element-editor>strong,.element-editor>input[type="text"],.element-editor>.segmented { grid-column:1/-1; }
+  .guide-row { grid-template-columns:1fr; }
+}
 
 @media (max-width:430px) {
   .home-shell { padding-right:12px; padding-left:12px; }

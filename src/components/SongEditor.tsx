@@ -7,12 +7,14 @@ import { PhotosTab } from "./tabs/PhotosTab";
 import { RecordingTab } from "./tabs/RecordingTab";
 import { AudioTab } from "./tabs/AudioTab";
 import { SketchTab } from "./tabs/SketchTab";
+import type { AppSettings } from "../settings";
 
 export type TabProps = {
   song: Song;
   workspace: SongWorkspace;
   setWorkspace: Dispatch<SetStateAction<SongWorkspace>>;
   queueSave: QueueSave;
+  settings: AppSettings;
   notify(message: string): void;
 };
 
@@ -24,7 +26,7 @@ export function SongEditor(props: TabProps & { patchSong(patch: Partial<Song>): 
   const [tab, setTab] = useState<SongTab>(props.initialTab);
   const [infoOpen, setInfoOpen] = useState(false);
   const titleInput = useRef<HTMLInputElement>(null);
-  const common: TabProps = { song: props.song, workspace: props.workspace, setWorkspace: props.setWorkspace, queueSave: props.queueSave, notify: props.notify };
+  const common: TabProps = { song: props.song, workspace: props.workspace, setWorkspace: props.setWorkspace, queueSave: props.queueSave, settings: props.settings, notify: props.notify };
   const legacyFields = [
     ["仮タイトル", props.song.workingTitle], ["主人公", props.song.protagonist], ["相手", props.song.counterpart], ["場所", props.song.place], ["時間", props.song.time], ["視点", props.song.perspective], ["基本色", props.song.baseColor], ["繰り返す言葉", props.song.repeatedWords], ["繰り返す物", props.song.repeatedObjects], ["避けたい表現", props.song.avoidExpressions], ["残したい感情", props.song.lastingEmotion],
   ].filter(([, value]) => value);

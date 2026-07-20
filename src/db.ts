@@ -2,7 +2,7 @@ import Dexie, { type EntityTable } from "dexie";
 import type { AppMeta, AssociationCard, Idea, IdeaCategory, InboxItem, LyricLine, LyricSection, MediaAsset, MVScene, SketchRecord, Song, SongWorkspace } from "./types";
 
 export const DB_NAME = "yohaku-lyric-notebook";
-export const DB_VERSION = 3;
+export const DB_VERSION = 4;
 export const STORES_V1 = {
   songs: "id, updatedAt, createdAt, stage, *tags",
   sections: "id, songId, [songId+order]",
@@ -20,6 +20,7 @@ export const STORES_V3 = {
   ideas: "id, songId, category, pinned, updatedAt",
   inbox: "id, kind, createdAt, updatedAt, deletedAt",
 };
+export const STORES_V4 = { ...STORES_V3, ideas: "id, songId, category, updatedAt" };
 
 const legacyTableNames = Object.keys(STORES_V2);
 
@@ -44,6 +45,22 @@ export class LyricDatabase extends Dexie {
       // 最新の利用者指示に基づき、v2以前の端末データを今回だけ全消去する。
       for (const tableName of legacyTableNames) await tx.table(tableName).clear();
       await tx.table("meta").put({ key: "v3ResetComplete", value: new Date().toISOString() });
+    });
+    this.version(4).stores(STORES_V4).upgrade(async (tx) => {
+      await tx.table("ideas").toCollection().modify((idea: Record<string, unknown>) => {
+        delete idea.pinned;
+        delete idea.sourceExcerpt;
+        if (!Array.isArray(idea.assetIds)) idea.assetIds = [];
+      });
+      await tx.table("sketches").toCollection().modify((sketch: Partial<SketchRecord>) => {
+        if (!Array.isArray(sketch.strokes)) sketch.strokes = [];
+        if (!Array.isArray(sketch.texts)) sketch.texts = [];
+        if (!Array.isArray(sketch.arrows)) sketch.arrows = [];
+        if (typeof sketch.guideVisible !== "boolean") sketch.guideVisible = true;
+        if (typeof sketch.guideInExport !== "boolean") sketch.guideInExport = false;
+        if (!sketch.backgroundColor) sketch.backgroundColor = "#fffdf9";
+        if (!sketch.promptFields || typeof sketch.promptFields !== "object") sketch.promptFields = {};
+      });
     });
   }
 }
@@ -93,7 +110,7 @@ export const inboxAssetIds = (item: InboxItem) => Array.from(new Set([...(item.a
 export async function moveInboxToSong(item: InboxItem, songId: string) {
   const stamp = now(); const assetIds = inboxAssetIds(item);
   await db.transaction("rw", [db.ideas, db.media, db.inbox, db.songs], async () => {
-    if (item.text.trim()) await db.ideas.add({ id: uid(), songId, text: item.text.trim(), pinned: false, assetIds, createdAt: item.createdAt, updatedAt: stamp });
+    if (item.text.trim()) await db.ideas.add({ id: uid(), songId, text: item.text.trim(), assetIds, createdAt: item.createdAt, updatedAt: stamp });
     const assets = await db.media.bulkGet(assetIds);
     await db.media.bulkPut(assets.filter((asset): asset is MediaAsset => Boolean(asset)).map((asset) => ({ ...asset, songId, updatedAt: stamp })));
     await db.inbox.delete(item.id); await db.songs.update(songId, { updatedAt: stamp });
@@ -121,21 +138,23 @@ export async function duplicateSong(sourceId: string) {
 const ideaCategoryForAssociation = (category: AssociationCard["category"]): IdeaCategory | undefined => category === "次の歌詞" ? "言葉・歌詞" : category === "音" ? "音・メロディ" : category === "MV映像" ? "映像" : undefined;
 
 export async function normalizeRestoredData() {
-  const [sections, lines, associations, scenes, existingIdeas, media, inbox] = await Promise.all([db.sections.toArray(), db.lyricLines.toArray(), db.associations.toArray(), db.mvScenes.toArray(), db.ideas.toArray(), db.media.toArray(), db.inbox.toArray()]);
+  const [sections, lines, associations, scenes, existingIdeas, sketches, media, inbox] = await Promise.all([db.sections.toArray(), db.lyricLines.toArray(), db.associations.toArray(), db.mvScenes.toArray(), db.ideas.toArray(), db.sketches.toArray(), db.media.toArray(), db.inbox.toArray()]);
   const ideaIds = new Set(existingIdeas.map((item) => item.id)); const linesBySection = new Map<string, LyricLine[]>();
   for (const line of lines) { const items = linesBySection.get(line.sectionId) ?? []; items.push(line); linesBySection.set(line.sectionId, items); }
   const normalizedSections = sections.map((section) => ({ ...section, body: typeof section.body === "string" ? section.body : (linesBySection.get(section.id) ?? []).sort((a, b) => a.order - b.order).map((line) => line.text).join("\n") }));
   const migratedIdeas: Idea[] = [];
   for (const card of associations) {
     const id = `legacy-association-${card.id}`; if (ideaIds.has(id)) continue;
-    migratedIdeas.push({ id, songId: card.songId, text: card.text, category: ideaCategoryForAssociation(card.category), pinned: false, assetIds: card.imageAssetId ? [card.imageAssetId] : [], legacyAssociationId: card.id, createdAt: card.createdAt, updatedAt: card.updatedAt }); ideaIds.add(id);
+    migratedIdeas.push({ id, songId: card.songId, text: card.text, category: ideaCategoryForAssociation(card.category), assetIds: card.imageAssetId ? [card.imageAssetId] : [], legacyAssociationId: card.id, createdAt: card.createdAt, updatedAt: card.updatedAt }); ideaIds.add(id);
   }
   for (const scene of scenes) {
     const id = `legacy-scene-${scene.id}`; if (ideaIds.has(id)) continue;
-    migratedIdeas.push({ id, songId: scene.songId, text: [scene.name, scene.action, scene.note].filter(Boolean).join("\n"), category: "映像", pinned: false, assetIds: scene.referenceAssetIds, legacySceneId: scene.id, createdAt: scene.createdAt, updatedAt: scene.updatedAt }); ideaIds.add(id);
+    migratedIdeas.push({ id, songId: scene.songId, text: [scene.name, scene.action, scene.note].filter(Boolean).join("\n"), category: "映像", assetIds: scene.referenceAssetIds, legacySceneId: scene.id, createdAt: scene.createdAt, updatedAt: scene.updatedAt }); ideaIds.add(id);
   }
-  await db.transaction("rw", [db.sections, db.ideas, db.media, db.inbox], async () => {
+  await db.transaction("rw", [db.sections, db.ideas, db.sketches, db.media, db.inbox], async () => {
     await db.sections.bulkPut(normalizedSections); if (migratedIdeas.length) await db.ideas.bulkAdd(migratedIdeas);
+    await db.ideas.toCollection().modify((idea: Idea) => { delete idea.pinned; delete idea.sourceExcerpt; if (!Array.isArray(idea.assetIds)) idea.assetIds = []; });
+    await db.sketches.bulkPut(sketches.map((sketch) => ({ ...sketch, strokes: sketch.strokes ?? [], texts: sketch.texts ?? [], arrows: sketch.arrows ?? [], guideVisible: sketch.guideVisible ?? true, guideInExport: sketch.guideInExport ?? false, backgroundColor: sketch.backgroundColor ?? "#fffdf9", promptFields: sketch.promptFields ?? {} })));
     await db.media.bulkPut(media.map((item) => ({ ...item, note: item.note ?? "" })));
     await db.inbox.bulkPut(inbox.map((item) => ({ ...item, kind: "note" as const, assetIds: inboxAssetIds(item), updatedAt: item.updatedAt ?? item.createdAt })));
   });

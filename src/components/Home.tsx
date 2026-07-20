@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createBackupBlob, inspectBackup, restoreBackup } from "../backup";
-import type { ThemeMode } from "../App";
 import { db, now } from "../db";
 import { downloadBlob } from "../media";
 import type { InboxItem, Song } from "../types";
+import { GPT_REQUEST_OPTIONS, type AppSettings, type GptRequestId } from "../settings";
+import { GptCopySheet, type CopyPhrase } from "./GptCopySheet";
 
 type Props = {
   songs: Song[];
   inbox: InboxItem[];
-  theme: ThemeMode;
-  onTheme(theme: ThemeMode): void;
+  settings: AppSettings;
+  onSettings(patch: Partial<AppSettings>): Promise<void>;
+  onResetAll(): Promise<void>;
   onOpen(song: Song): void;
   onCreate(): void;
   onQuickAdd(text: string, files: File[]): Promise<void>;
@@ -38,6 +40,7 @@ export function Home(props: Props) {
   const [restoreMode, setRestoreMode] = useState<"merge" | "replace">("merge");
   const [lastBackupAt, setLastBackupAt] = useState<string>();
   const [selectedSongs, setSelectedSongs] = useState<Record<string, string>>({});
+  const [copyRequest, setCopyRequest] = useState<{ phrases: CopyPhrase[]; initialIds: string[] }>();
   const imageInput = useRef<HTMLInputElement>(null);
   const restoreInput = useRef<HTMLInputElement>(null);
   const recorder = useRef<MediaRecorder | undefined>(undefined);
@@ -111,9 +114,29 @@ export function Home(props: Props) {
 
   async function runRestore() {
     if (!restoreFile) return;
-    if (restoreMode === "replace" && !window.confirm("現在の全データを削除し、バックアップの内容に置き換えます。続けますか？")) return;
+    const warning = restoreMode === "replace" ? "現在の全データを削除し、バックアップの内容に置き換えます。" : "現在のデータへバックアップ内容を追加します。同じ曲が重複する場合があります。";
+    if (!window.confirm(`${warning}\n復元を続けますか？`)) return;
     try { await restoreBackup(restoreFile, restoreMode); await props.onRefresh(); setSettingsOpen(false); props.notify("復元しました。"); }
     catch (error) { props.notify(error instanceof Error ? error.message : "復元に失敗しました。"); }
+  }
+
+  async function resetAll() {
+    if (!window.confirm("すべての曲、メモ、画像、音声、スケッチを削除しますか？\nこの操作は取り消せません。")) return;
+    if (!window.confirm("最終確認です。本当にすべてのデータを初期化しますか？")) return;
+    try { await props.onResetAll(); setSettingsOpen(false); props.notify("すべてのデータを初期化しました。"); }
+    catch (error) { props.notify(error instanceof Error ? error.message : "初期化できませんでした。"); }
+  }
+
+  const inboxPhrases = props.inbox.filter((item) => item.text.trim()).map((item) => ({ id: item.id, text: item.text.trim() }));
+  function openCopy(id: string, extra?: CopyPhrase) {
+    const phrases = extra ? [extra, ...inboxPhrases.filter((item) => item.id !== extra.id)] : inboxPhrases;
+    setCopyRequest({ phrases, initialIds: [id] });
+  }
+
+  function toggleDefaultRequest(id: GptRequestId) {
+    const current = props.settings.gptDefaultRequests;
+    const next = current.includes(id) ? current.filter((item) => item !== id) : [...current, id];
+    if (next.length) void props.onSettings({ gptDefaultRequests: next });
   }
 
   return (
@@ -131,6 +154,7 @@ export function Home(props: Props) {
           <input ref={imageInput} hidden type="file" accept="image/*" multiple onChange={(event) => { if (event.target.files) setFiles((current) => [...current, ...Array.from(event.target.files!)]); event.target.value = ""; }} />
           <button className="primary" disabled={saving || (!text.trim() && files.length === 0)} onClick={saveMemo}>{saving ? "保存中" : "保存"}</button>
         </div>
+        {text.trim() && <button className="copy-link" onClick={() => openCopy("quick-draft", { id: "quick-draft", text: text.trim() })}>GPT用にコピー</button>}
       </section>
 
       <section className="memo-section">
@@ -143,6 +167,7 @@ export function Home(props: Props) {
             <select aria-label="移動先の曲" value={selectedSongs[item.id] ?? ""} onChange={(event) => setSelectedSongs((current) => ({ ...current, [item.id]: event.target.value }))}><option value="">既存の曲を選択</option>{props.songs.filter((song) => !song.archived).map((song) => <option key={song.id} value={song.id}>{song.title}</option>)}</select>
             <button disabled={!selectedSongs[item.id]} onClick={() => void props.onMoveInbox(item, selectedSongs[item.id])}>曲へ入れる</button>
             <button onClick={() => void props.onSongFromInbox(item)}>新しい曲にする</button>
+            {item.text.trim() && <button onClick={() => openCopy(item.id)}>GPT用にコピー</button>}
             <button className="danger-text" onClick={() => void removeMemo(item)}>削除</button>
           </div>
         </details>)}</div>
@@ -156,7 +181,13 @@ export function Home(props: Props) {
         {visibleSongs.length === 0 && <p className="plain-empty">曲はありません。</p>}
       </section>
 
-      {settingsOpen && <div className="modal-backdrop"><div className="modal settings-modal"><div className="modal-title"><h2>全体設定</h2><button onClick={() => setSettingsOpen(false)} aria-label="閉じる">×</button></div><h3>表示</h3><div className="segmented"><button className={props.theme === "system" ? "active" : ""} onClick={() => props.onTheme("system")}>端末設定</button><button className={props.theme === "light" ? "active" : ""} onClick={() => props.onTheme("light")}>ライト</button><button className={props.theme === "dark" ? "active" : ""} onClick={() => props.onTheme("dark")}>ダーク</button></div><hr /><h3>バックアップ</h3>{lastBackupAt && <p>最終バックアップ：{new Date(lastBackupAt).toLocaleString("ja-JP")}</p>}<button className="primary full" onClick={exportBackup}>書き出す</button><button className="file-picker full" onClick={() => restoreInput.current?.click()}>{restoreFile?.name || "バックアップを選択"}</button><input ref={restoreInput} hidden type="file" accept=".zip,application/zip" onChange={(event) => void chooseRestore(event.target.files?.[0])} />{restoreInfo && <><p className="restore-info">検証済み：{restoreInfo}</p><div className="segmented"><button className={restoreMode === "merge" ? "active" : ""} onClick={() => setRestoreMode("merge")}>追加</button><button className={restoreMode === "replace" ? "active" : ""} onClick={() => setRestoreMode("replace")}>置き換え</button></div><button className={restoreMode === "replace" ? "danger full" : "primary full"} onClick={runRestore}>復元</button></>}</div></div>}
+      {settingsOpen && <div className="modal-backdrop"><div className="modal settings-modal"><div className="modal-title"><h2>設定</h2><button onClick={() => setSettingsOpen(false)} aria-label="閉じる">×</button></div>
+        <details className="settings-group" open><summary>表示</summary><label>テーマ<select value={props.settings.theme} onChange={(event) => void props.onSettings({ theme: event.target.value as AppSettings["theme"] })}><option value="system">端末に合わせる</option><option value="light">明るい</option><option value="dark">暗い</option></select></label><label>文字サイズ<select value={props.settings.fontSize} onChange={(event) => void props.onSettings({ fontSize: event.target.value as AppSettings["fontSize"] })}><option value="small">小</option><option value="standard">標準</option><option value="large">大</option></select></label><label className="setting-color">アクセントカラー<input type="color" value={props.settings.accentColor} onChange={(event) => void props.onSettings({ accentColor: event.target.value })} /></label></details>
+        <details className="settings-group"><summary>GPT用コピー</summary><fieldset><legend>初期状態の依頼内容</legend><div className="check-list compact">{GPT_REQUEST_OPTIONS.map((item) => <label key={item.id}><input type="checkbox" checked={props.settings.gptDefaultRequests.includes(item.id)} onChange={() => toggleDefaultRequest(item.id)} /><span>{item.label}</span></label>)}</div></fieldset><label>提示してもらう案の数<select value={props.settings.gptSuggestionCount} onChange={(event) => void props.onSettings({ gptSuggestionCount: Number(event.target.value) as 5 | 10 | 20 })}><option value="5">5案</option><option value="10">10案</option><option value="20">20案</option></select></label><label className="switch-row"><span>コピー前に文章を確認</span><input type="checkbox" checked={props.settings.gptConfirmBeforeCopy} onChange={(event) => void props.onSettings({ gptConfirmBeforeCopy: event.target.checked })} /></label></details>
+        <details className="settings-group"><summary>スケッチ</summary><label>初期キャンバス比率<select value={props.settings.sketchDefaultAspect} onChange={(event) => void props.onSettings({ sketchDefaultAspect: event.target.value as AppSettings["sketchDefaultAspect"] })}><option>16:9</option><option>9:16</option><option>1:1</option></select></label><label>構図ガイド<select value={props.settings.sketchGuideDefault ? "show" : "hide"} onChange={(event) => void props.onSettings({ sketchGuideDefault: event.target.value === "show" })}><option value="show">表示</option><option value="hide">非表示</option></select></label><label className="setting-color">ペンの初期色<input type="color" value={props.settings.sketchPenColor} onChange={(event) => void props.onSettings({ sketchPenColor: event.target.value })} /></label><label>ペンの初期太さ<input type="range" min="1" max="28" value={props.settings.sketchPenWidth} onChange={(event) => void props.onSettings({ sketchPenWidth: Number(event.target.value) })} /></label><label>文字の初期サイズ<select value={props.settings.sketchTextSize} onChange={(event) => void props.onSettings({ sketchTextSize: event.target.value as AppSettings["sketchTextSize"] })}><option value="small">小</option><option value="medium">中</option><option value="large">大</option></select></label><label>画像保存時の背景<select value={props.settings.sketchExportBackground} onChange={(event) => void props.onSettings({ sketchExportBackground: event.target.value as AppSettings["sketchExportBackground"] })}><option value="white">白</option><option value="current">現在の背景色</option><option value="transparent">透明</option></select></label></details>
+        <details className="settings-group"><summary>データ管理</summary>{lastBackupAt && <p>最終バックアップ：{new Date(lastBackupAt).toLocaleString("ja-JP")}</p>}<button className="primary full" onClick={exportBackup}>バックアップを書き出す</button><button className="file-picker full" onClick={() => restoreInput.current?.click()}>{restoreFile?.name || "バックアップから復元"}</button><input ref={restoreInput} hidden type="file" accept=".zip,application/zip" onChange={(event) => void chooseRestore(event.target.files?.[0])} />{restoreInfo && <><p className="restore-info">検証済み：{restoreInfo}</p><div className="segmented"><button className={restoreMode === "merge" ? "active" : ""} onClick={() => setRestoreMode("merge")}>追加</button><button className={restoreMode === "replace" ? "active" : ""} onClick={() => setRestoreMode("replace")}>置き換え</button></div><button className={restoreMode === "replace" ? "danger full" : "primary full"} onClick={runRestore}>復元する</button></>}<button className="danger full" onClick={() => void resetAll()}>すべてのデータを初期化</button></details>
+      </div></div>}
+      {copyRequest && <GptCopySheet {...copyRequest} settings={props.settings} onClose={() => setCopyRequest(undefined)} notify={props.notify} />}
     </main>
   );
 }
