@@ -14,9 +14,9 @@ export function SketchTab({ song, workspace, setWorkspace, notify }: TabProps) {
   }
   function update(next: SketchRecord) { setWorkspace((data) => ({ ...data, sketches: data.sketches.map((x) => x.id === next.id ? next : x) })); }
   async function remove(sketch: SketchRecord) { if (!window.confirm("このスケッチを削除しますか？")) return; await db.sketches.delete(sketch.id); setWorkspace((data) => ({ ...data, sketches: data.sketches.filter((x) => x.id !== sketch.id) })); setSelectedId(undefined); }
-  return <section className="tab-page sketch-page"><div className="tab-heading"><div><p className="eyebrow">STORYBOARD</p><h2>指で描く</h2></div><button className="primary compact" onClick={addSketch}>＋ 新規</button></div>
+  return <section className="tab-page sketch-page"><div className="tab-heading"><h2>スケッチ</h2><button className="primary compact" onClick={addSketch}>＋ 新規</button></div>
     <div className="sketch-picker">{workspace.sketches.map((sketch) => <button className={sketch.id === selected?.id ? "active" : ""} key={sketch.id} onClick={() => setSelectedId(sketch.id)}><BlobImage blob={sketch.previewBlob} alt="" /><span>{sketch.name}</span></button>)}</div>
-    {selected ? <CanvasEditor key={selected.id} record={selected} lines={workspace.lines} scenes={workspace.scenes} onUpdate={update} onDelete={() => remove(selected)} notify={notify} /> : <div className="empty-card"><div>✎</div><h3>指先で場面を残せます</h3><p>縦・横・正方形のキャンバスと、画像の下敷きに対応しています。</p><button className="primary" onClick={addSketch}>最初のスケッチ</button></div>}
+    {selected ? <CanvasEditor key={selected.id} record={selected} lines={workspace.lines} scenes={workspace.scenes} onUpdate={update} onDelete={() => remove(selected)} notify={notify} /> : <div className="empty-card"><h3>スケッチがありません</h3><p>16:9、9:16、1:1のキャンバスと画像の下敷きを使用できます。</p><button className="primary" onClick={addSketch}>スケッチを作成</button></div>}
   </section>;
 }
 

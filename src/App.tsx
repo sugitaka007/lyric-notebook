@@ -15,7 +15,6 @@ export default function App() {
   const [activeSong, setActiveSong] = useState<Song | null>(null);
   const [workspace, setWorkspace] = useState<SongWorkspace>(EMPTY_WORKSPACE);
   const [ready, setReady] = useState(false);
-  const [onboarding, setOnboarding] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const [notice, setNotice] = useState("");
   const [online, setOnline] = useState(navigator.onLine);
@@ -29,8 +28,8 @@ export default function App() {
   useEffect(() => {
     let mounted = true;
     const pendingTimers = timers.current;
-    Promise.all([refreshHome(), db.meta.get("onboardingDone")])
-      .then(([, done]) => { if (mounted) { setOnboarding(!done); setReady(true); } })
+    refreshHome()
+      .then(() => { if (mounted) setReady(true); })
       .catch((error) => { setNotice(storageErrorMessage(error)); setReady(true); });
     const goOnline = () => setOnline(true); const goOffline = () => setOnline(false);
     window.addEventListener("online", goOnline); window.addEventListener("offline", goOffline);
@@ -55,13 +54,6 @@ export default function App() {
       } catch (error) { setSaveState("error"); setNotice(storageErrorMessage(error)); }
     }, 450));
   }, []);
-
-  async function finishOnboarding(withSample: boolean) {
-    try {
-      if (withSample) await createSong(undefined, true);
-      await db.meta.put({ key: "onboardingDone", value: true }); setOnboarding(false); await refreshHome();
-    } catch (error) { setNotice(storageErrorMessage(error)); }
-  }
 
   async function openSong(song: Song) {
     try { setActiveSong(song); setWorkspace(await loadWorkspace(song.id)); window.scrollTo({ top: 0 }); }
@@ -105,7 +97,7 @@ export default function App() {
     setActiveSong(updated); setSongs((items) => items.map((song) => song.id === updated.id ? updated : song)); queueSave(db.songs, updated);
   }
 
-  if (!ready) return <div className="launch-screen"><span>余</span><p>創作ノートを開いています…</p></div>;
+  if (!ready) return <div className="launch-screen"><span aria-hidden="true" /><p>アートメモを起動中…</p></div>;
 
   return (
     <div className="app" data-online={online}>
@@ -114,11 +106,6 @@ export default function App() {
         <SongEditor song={activeSong} workspace={workspace} setWorkspace={setWorkspace} patchSong={patchSong} queueSave={queueSave} saveState={saveState} onBack={async () => { setActiveSong(null); await refreshHome(); }} notify={setNotice} />
       ) : (
         <Home songs={songs} inbox={inbox} onOpen={openSong} onCreate={addSong} onDelete={removeSong} onDuplicate={copySong} onArchive={toggleArchive} onQuickAdd={addInbox} onRefresh={refreshHome} notify={setNotice} />
-      )}
-      {onboarding && (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
-          <div className="modal welcome-modal"><div className="brand-seal">余</div><p className="eyebrow">PRIVATE LYRIC NOTEBOOK</p><h1 id="welcome-title">あなたの言葉に、<br />静かな余白を。</h1><p>すべてのデータはこの端末の中だけに保存されます。最初のノートをどう始めますか？</p><div className="modal-actions stack"><button className="primary" onClick={() => finishOnboarding(false)}>空のノートで始める</button><button onClick={() => finishOnboarding(true)}>サンプルを見て始める</button></div></div>
-        </div>
       )}
       {notice && <div className="toast" role="status">{notice}</div>}
     </div>

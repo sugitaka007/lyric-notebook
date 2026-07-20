@@ -9,6 +9,7 @@ afterAll(async () => { await db.delete(); });
 describe("曲と関連データ", () => {
   it("曲を作成・編集・削除できる", async () => {
     const song = await createSong("テスト曲"); await db.songs.update(song.id, { workingTitle: "仮題", updatedAt: now() });
+    expect(await db.lyricLines.count()).toBe(0);
     expect((await db.songs.get(song.id))?.workingTitle).toBe("仮題");
     await deleteSongCascade(song.id); expect(await db.songs.count()).toBe(0); expect(await db.sections.count()).toBe(0);
   });

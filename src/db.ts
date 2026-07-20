@@ -53,20 +53,15 @@ export const now = () => new Date().toISOString();
 
 export function emptySong(title = "無題の曲"): Song {
   const stamp = now();
-  return { id: uid(), title, workingTitle: "", summary: "", protagonist: "", counterpart: "", place: "", time: "", perspective: "", baseColor: "#9a7189", repeatedWords: "", repeatedObjects: "", avoidExpressions: "", lastingEmotion: "", stage: "種", color: "#9a7189", tags: [], archived: false, createdAt: stamp, updatedAt: stamp };
+  return { id: uid(), title, workingTitle: "", summary: "", protagonist: "", counterpart: "", place: "", time: "", perspective: "", baseColor: "#ffd60a", repeatedWords: "", repeatedObjects: "", avoidExpressions: "", lastingEmotion: "", stage: "種", color: "#ffd60a", tags: [], archived: false, createdAt: stamp, updatedAt: stamp };
 }
 
-export async function createSong(title?: string, sample = false) {
+export async function createSong(title?: string) {
   const song = emptySong(title);
-  if (sample) Object.assign(song, { title: "夜明けの余白", workingTitle: "朝焼け", summary: "言えなかった一言が朝の光にほどける歌。", protagonist: "夜を歩く私", counterpart: "もう会えないあなた", place: "始発前の海辺", time: "夜明け", perspective: "一人称", repeatedWords: "まだ／ひかり", repeatedObjects: "白い息／鍵", avoidExpressions: "直接的な別れの言葉", lastingEmotion: "寂しさの奥に残る小さな希望", stage: "制作中", tags: ["夜明け", "バラード"] } satisfies Partial<Song>);
-  const names = sample ? ["Aメロ", "Bメロ", "サビ"] : ["Aメロ", "サビ"];
+  const names = ["Aメロ", "サビ"];
   const sections = names.map((name, order) => ({ id: uid(), songId: song.id, name, order }));
-  const lines: LyricLine[] = sample ? [
-    { id: uid(), songId: song.id, sectionId: sections[0].id, text: "白い息を置いて　始発を待つ", status: "仮採用", alternate: "", note: "静かな入り", order: 0, createdAt: now(), updatedAt: now() },
-    { id: uid(), songId: song.id, sectionId: sections[2].id, text: "まだ光と呼べない空へ", status: "重要", alternate: "朝になる前の空へ", note: "曲名候補につながる行", order: 0, createdAt: now(), updatedAt: now() },
-  ] : [];
   await db.transaction("rw", [db.songs, db.sections, db.lyricLines], async () => {
-    await db.songs.add(song); await db.sections.bulkAdd(sections); if (lines.length) await db.lyricLines.bulkAdd(lines);
+    await db.songs.add(song); await db.sections.bulkAdd(sections);
   });
   return song;
 }

@@ -24,7 +24,7 @@ export function SongEditor(props: TabProps & { patchSong(patch: Partial<Song>): 
   const common: TabProps = { song: props.song, workspace: props.workspace, setWorkspace: props.setWorkspace, queueSave: props.queueSave, notify: props.notify };
   return (
     <main className="editor-shell">
-      <header className="editor-header"><button className="back-button" onClick={props.onBack} aria-label="曲の棚へ戻る">‹</button><div><p>{props.song.workingTitle ? `仮題：${props.song.workingTitle}` : "SONG NOTE"}</p><input aria-label="曲名" value={props.song.title} onChange={(e) => props.patchSong({ title: e.target.value })} /></div><span className={`save-state ${props.saveState}`}>{props.saveState === "saving" ? "保存中…" : props.saveState === "error" ? "保存失敗" : "保存済み"}</span></header>
+      <header className="editor-header"><button className="back-button" onClick={props.onBack} aria-label="曲一覧へ戻る">‹</button><div><p>{props.song.workingTitle ? `仮タイトル：${props.song.workingTitle}` : "曲名"}</p><input aria-label="曲名" value={props.song.title} onChange={(e) => props.patchSong({ title: e.target.value })} /></div><span className={`save-state ${props.saveState}`}>{props.saveState === "saving" ? "保存中…" : props.saveState === "error" ? "保存失敗" : "保存済み"}</span></header>
       <div className="editor-content">
         {tab === "lyrics" && <LyricsTab {...common} />}
         {tab === "associations" && <AssociationsTab {...common} />}
