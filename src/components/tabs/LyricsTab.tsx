@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { db, moveOrdered, now, uid } from "../../db";
 import type { Idea, LyricLine, LyricSection } from "../../types";
 import type { TabProps } from "../SongEditor";
@@ -10,8 +11,15 @@ const newLine = (songId: string, sectionId: string, order: number, source?: Lyri
 };
 
 export function LyricsTab({ song, workspace, setWorkspace, queueSave }: TabProps) {
+  const [focusLineId, setFocusLineId] = useState<string>();
   const sortedSections = [...workspace.sections].sort((a, b) => a.order - b.order);
   const sectionLines = (sectionId: string) => workspace.lines.filter((line) => line.sectionId === sectionId).sort((a, b) => a.order - b.order);
+
+  useEffect(() => {
+    if (!focusLineId) return;
+    const input = document.getElementById(`line-${focusLineId}`);
+    if (input instanceof HTMLInputElement) { input.focus(); setFocusLineId(undefined); }
+  }, [focusLineId, workspace.lines]);
 
   function sectionWithBody(sectionId: string, lines: LyricLine[]) {
     const section = workspace.sections.find((item) => item.id === sectionId);
@@ -24,7 +32,7 @@ export function LyricsTab({ song, workspace, setWorkspace, queueSave }: TabProps
     const line = newLine(song.id, section.id, 0);
     await db.transaction("rw", [db.sections, db.lyricLines], async () => { await db.sections.add(section); await db.lyricLines.add(line); });
     setWorkspace((data) => ({ ...data, sections: [...data.sections, section], lines: [...data.lines, line] }));
-    window.setTimeout(() => document.getElementById(`line-${line.id}`)?.focus(), 0);
+    setFocusLineId(line.id);
   }
 
   function patchSection(section: LyricSection, patch: Partial<LyricSection>) {
@@ -55,7 +63,7 @@ export function LyricsTab({ song, workspace, setWorkspace, queueSave }: TabProps
     const updatedSection = sectionWithBody(section.id, next) ?? section;
     await db.transaction("rw", [db.lyricLines, db.sections], async () => { await db.lyricLines.bulkPut([...shifted, line]); await db.sections.put(updatedSection); });
     setWorkspace((data) => ({ ...data, lines: [...data.lines.filter((item) => item.sectionId !== section.id), ...next], sections: data.sections.map((item) => item.id === section.id ? updatedSection : item) }));
-    window.setTimeout(() => document.getElementById(`line-${line.id}`)?.focus(), 0);
+    setFocusLineId(line.id);
   }
 
   async function moveLine(section: LyricSection, index: number, delta: number) {

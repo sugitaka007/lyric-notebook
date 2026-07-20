@@ -185,7 +185,7 @@ export function Home(props: Props) {
 
       <section className="quick-composer">
         <h2>クイック追加</h2>
-        <textarea aria-label="クイック追加のメモ" value={text} onChange={(event) => setText(event.target.value)} placeholder="" rows={3} />
+        <textarea aria-label="クイック追加のメモ" value={text} onChange={(event) => setText(event.target.value)} placeholder="" rows={2} />
         {files.length > 0 && <ul className="attachment-list">{files.map((file, index) => <li key={`${file.name}-${index}`}><span>{file.name}</span><button onClick={() => setFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))} aria-label={`${file.name}を外す`}>×</button></li>)}</ul>}
         <div className="quick-actions">
           <button className={recording ? "recording" : ""} onClick={recording ? stopRecording : startRecording}>{recording ? `録音停止 ${recordSeconds}秒` : "音声録音"}</button>
