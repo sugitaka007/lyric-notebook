@@ -4,6 +4,7 @@ export type IdeaCategory = "言葉・歌詞" | "音・メロディ" | "映像" |
 export type SongStage = "種" | "制作中" | "推敲中" | "完成" | "保留";
 export type AspectRatio = "16:9" | "9:16" | "1:1";
 export type MediaKind = "image" | "audio" | "url";
+export type MediaOrigin = "recording" | "file";
 
 export interface Song {
   id: string; title: string; workingTitle: string; summary: string; protagonist: string;
@@ -29,7 +30,7 @@ export interface MVScene {
 }
 export interface Idea {
   id: string; songId: string; text: string; category?: IdeaCategory; pinned: boolean; assetIds: string[];
-  legacyAssociationId?: string; legacySceneId?: string; createdAt: string; updatedAt: string;
+  sourceExcerpt?: string; legacyAssociationId?: string; legacySceneId?: string; createdAt: string; updatedAt: string;
 }
 export interface Point { x: number; y: number; }
 export interface Stroke { tool: "pen" | "eraser"; color: string; width: number; points: Point[]; }
@@ -40,7 +41,7 @@ export interface SketchRecord {
 }
 export interface MediaLink { type: "lyric" | "association" | "scene"; id: string; }
 export interface MediaAsset {
-  id: string; songId?: string; kind: MediaKind; name: string; note?: string; mimeType: string; blob?: Blob;
+  id: string; songId?: string; kind: MediaKind; origin?: MediaOrigin; name: string; note?: string; mimeType: string; blob?: Blob;
   size: number; url?: string; links: MediaLink[]; createdAt: string; updatedAt: string;
 }
 export interface InboxItem {

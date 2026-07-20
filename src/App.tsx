@@ -16,6 +16,7 @@ export default function App() {
   const [inbox, setInbox] = useState<InboxItem[]>([]);
   const [activeSong, setActiveSong] = useState<Song | null>(null);
   const [initialTab, setInitialTab] = useState<SongTab>("lyrics");
+  const [focusSongTitle, setFocusSongTitle] = useState(false);
   const [workspace, setWorkspace] = useState<SongWorkspace>(EMPTY_WORKSPACE);
   const [ready, setReady] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>("saved");
@@ -53,29 +54,6 @@ export default function App() {
     else document.documentElement.dataset.theme = theme;
   }, [theme]);
 
-  useEffect(() => {
-    const viewport = window.visualViewport;
-    if (!viewport) return;
-    let baseline = Math.max(viewport.height, window.innerHeight);
-    const update = () => {
-      if (viewport.height > baseline - 40) baseline = Math.max(baseline, viewport.height);
-      const focused = document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement || document.activeElement instanceof HTMLSelectElement;
-      const open = focused && baseline - viewport.height > 120;
-      document.documentElement.classList.toggle("keyboard-open", open);
-      document.documentElement.style.setProperty("--visual-viewport-height", `${viewport.height}px`);
-      document.documentElement.style.setProperty("--visual-viewport-top", `${viewport.offsetTop}px`);
-      if (open && document.activeElement instanceof HTMLElement) window.setTimeout(() => document.activeElement instanceof HTMLElement && document.activeElement.scrollIntoView({ block: "center", behavior: "smooth" }), 60);
-    };
-    const focusIn = () => window.setTimeout(update, 50);
-    const focusOut = () => window.setTimeout(update, 150);
-    viewport.addEventListener("resize", update);
-    viewport.addEventListener("scroll", update);
-    document.addEventListener("focusin", focusIn);
-    document.addEventListener("focusout", focusOut);
-    update();
-    return () => { viewport.removeEventListener("resize", update); viewport.removeEventListener("scroll", update); document.removeEventListener("focusin", focusIn); document.removeEventListener("focusout", focusOut); document.documentElement.classList.remove("keyboard-open"); };
-  }, []);
-
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(""), 5200); return () => clearTimeout(timer); }, [notice]);
 
   const queueSave: QueueSave = useCallback((table, value) => {
@@ -99,13 +77,13 @@ export default function App() {
     }, 420));
   }, []);
 
-  async function openSong(song: Song, tab: SongTab = "lyrics") {
-    try { setInitialTab(tab); setActiveSong(song); setWorkspace(await loadWorkspace(song.id)); window.scrollTo({ top: 0 }); }
+  async function openSong(song: Song, tab: SongTab = "lyrics", focusTitle = false) {
+    try { setInitialTab(tab); setFocusSongTitle(focusTitle); setActiveSong(song); setWorkspace(await loadWorkspace(song.id)); window.scrollTo({ top: 0 }); }
     catch (error) { setNotice(storageErrorMessage(error)); }
   }
 
   async function addSong() {
-    try { const song = await createSong(); await refreshHome(); await openSong(song); }
+    try { const song = await createSong(); await refreshHome(); await openSong(song, "lyrics", true); }
     catch (error) { setNotice(storageErrorMessage(error)); }
   }
 
@@ -121,7 +99,7 @@ export default function App() {
       for (const file of files) {
         const isImage = file.type.startsWith("image/");
         const blob = isImage ? await compressImage(file) : file;
-        assets.push({ id: uid(), kind: isImage ? "image" : "audio", name: file.name, note: "", mimeType: blob.type || file.type, blob, size: blob.size, links: [], createdAt: stamp, updatedAt: stamp });
+        assets.push({ id: uid(), kind: isImage ? "image" : "audio", origin: isImage ? undefined : file.name.startsWith("録音-") ? "recording" : "file", name: file.name, note: "", mimeType: blob.type || file.type, blob, size: blob.size, links: [], createdAt: stamp, updatedAt: stamp });
       }
       const item: InboxItem = { id: uid(), kind: "note", text, assetIds: assets.map((asset) => asset.id), createdAt: stamp, updatedAt: stamp };
       await db.transaction("rw", [db.media, db.inbox], async () => { if (assets.length) await db.media.bulkAdd(assets); await db.inbox.add(item); });
@@ -148,7 +126,7 @@ export default function App() {
   }
 
   async function songFromInbox(item: InboxItem) {
-    try { const song = await createSong(); await moveInboxToSong(item, song.id); await refreshHome(); await openSong(song, "ideas"); }
+    try { const song = await createSong(); await moveInboxToSong(item, song.id); await refreshHome(); await openSong(song, "ideas", true); }
     catch (error) { setNotice(storageErrorMessage(error)); }
   }
 
@@ -166,13 +144,13 @@ export default function App() {
 
   return (
     <div className="app" data-online={online}>
-      {!online && <div className="offline-banner keyboard-hide" role="status">オフライン</div>}
+      {!online && <div className="offline-banner" role="status">オフライン</div>}
       {activeSong ? (
-        <SongEditor song={activeSong} workspace={workspace} setWorkspace={setWorkspace} patchSong={patchSong} queueSave={queueSave} saveState={saveState} initialTab={initialTab} onDelete={removeSong} onBack={async () => { setActiveSong(null); await refreshHome(); }} notify={setNotice} />
+        <SongEditor song={activeSong} workspace={workspace} setWorkspace={setWorkspace} patchSong={patchSong} queueSave={queueSave} saveState={saveState} initialTab={initialTab} focusTitle={focusSongTitle} onDelete={removeSong} onBack={async () => { setActiveSong(null); await refreshHome(); }} notify={setNotice} />
       ) : (
         <Home songs={songs} inbox={inbox} theme={theme} onTheme={setTheme} onOpen={openSong} onCreate={addSong} onQuickAdd={addInbox} onUpdateInbox={updateInbox} onDeleteInbox={deleteInbox} onMoveInbox={moveInbox} onSongFromInbox={songFromInbox} onRefresh={refreshHome} notify={setNotice} />
       )}
-      {notice && <div className="toast keyboard-hide" role="status">{notice}</div>}
+      {notice && <div className="toast" role="status">{notice}</div>}
     </div>
   );
 }

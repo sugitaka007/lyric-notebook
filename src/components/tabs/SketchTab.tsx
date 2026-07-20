@@ -5,7 +5,7 @@ import type { AspectRatio, SketchRecord, Stroke } from "../../types";
 import type { TabProps } from "../SongEditor";
 import { BlobImage } from "../ui";
 
-export function SketchPanel({ song, workspace, setWorkspace, notify }: TabProps) {
+export function SketchTab({ song, workspace, setWorkspace, notify }: TabProps) {
   const [selectedId, setSelectedId] = useState<string | undefined>(workspace.sketches[0]?.id);
   const selected = workspace.sketches.find((x) => x.id === selectedId) ?? workspace.sketches[0];
   async function addSketch() {
@@ -14,7 +14,7 @@ export function SketchPanel({ song, workspace, setWorkspace, notify }: TabProps)
   }
   function update(next: SketchRecord) { setWorkspace((data) => ({ ...data, sketches: data.sketches.map((x) => x.id === next.id ? next : x) })); }
   async function remove(sketch: SketchRecord) { if (!window.confirm("このスケッチを削除しますか？")) return; await db.sketches.delete(sketch.id); setWorkspace((data) => ({ ...data, sketches: data.sketches.filter((x) => x.id !== sketch.id) })); setSelectedId(undefined); }
-  return <section className="sketch-page"><div className="subsection-heading"><h2>スケッチ</h2><button className="primary compact" onClick={addSketch}>＋ 新規</button></div>
+  return <section className="tab-page sketch-page"><div className="tab-heading"><h1>スケッチ</h1><button className="primary compact" onClick={addSketch}>＋ 新規</button></div>
     <div className="sketch-picker">{workspace.sketches.map((sketch) => <button className={sketch.id === selected?.id ? "active" : ""} key={sketch.id} onClick={() => setSelectedId(sketch.id)}><BlobImage blob={sketch.previewBlob} alt="" /><span>{sketch.name}</span></button>)}</div>
     {selected ? <CanvasEditor key={selected.id} record={selected} onUpdate={update} onDelete={() => remove(selected)} notify={notify} /> : <div className="plain-empty"><p>スケッチはありません。</p><button onClick={addSketch}>スケッチを作成</button></div>}
   </section>;

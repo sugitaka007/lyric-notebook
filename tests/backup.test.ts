@@ -12,16 +12,17 @@ describe("バックアップ", () => {
     const song = await createSong("バックアップ曲"); const section = (await loadWorkspace(song.id)).sections[0];
     await db.sections.update(section.id, { body: "消えない言葉\n次の行" });
     const stamp = now(); const imageId = uid();
-    const idea: Idea = { id: uid(), songId: song.id, text: "映像の断片", category: "映像", pinned: true, assetIds: [imageId], createdAt: stamp, updatedAt: stamp };
-    const media: MediaAsset[] = [{ id: imageId, songId: song.id, kind: "image", name: "image.png", note: "参考", mimeType: "image/png", blob: new Blob(["image-bytes"], { type: "image/png" }), size: 11, links: [], createdAt: stamp, updatedAt: stamp }, { id: uid(), songId: song.id, kind: "audio", name: "voice.m4a", note: "鼻歌", mimeType: "audio/mp4", blob: new Blob(["audio-bytes"], { type: "audio/mp4" }), size: 11, links: [], createdAt: stamp, updatedAt: stamp }];
+    const idea: Idea = { id: uid(), songId: song.id, text: "映像の断片", category: "映像", sourceExcerpt: "消えない言葉", pinned: true, assetIds: [imageId], createdAt: stamp, updatedAt: stamp };
+    const media: MediaAsset[] = [{ id: imageId, songId: song.id, kind: "image", name: "image.png", note: "参考", mimeType: "image/png", blob: new Blob(["image-bytes"], { type: "image/png" }), size: 11, links: [], createdAt: stamp, updatedAt: stamp }, { id: uid(), songId: song.id, kind: "audio", origin: "recording", name: "録音.m4a", note: "鼻歌", mimeType: "audio/mp4", blob: new Blob(["audio-bytes"], { type: "audio/mp4" }), size: 11, links: [], createdAt: stamp, updatedAt: stamp }];
     await db.ideas.add(idea); await db.media.bulkAdd(media);
     const backup = await createBackupBlob(); const manifest = await inspectBackup(backup.blob);
     expect(manifest.formatVersion).toBe(BACKUP_FORMAT_VERSION); expect(manifest.counts.songs).toBe(1); expect(manifest.counts.media).toBe(2); expect(manifest.counts.ideas).toBe(1);
     await Promise.all(db.tables.map((table) => table.clear())); await restoreBackup(backup.blob, "replace");
     expect(await db.songs.count()).toBe(1);
     expect((await db.sections.get(section.id))?.body).toBe("消えない言葉\n次の行");
-    expect((await db.ideas.get(idea.id))?.text).toBe("映像の断片");
+    expect((await db.ideas.get(idea.id))?.sourceExcerpt).toBe("消えない言葉");
     const restored = await db.media.toArray(); expect(restored).toHaveLength(2); expect((await restored[0].blob?.text())?.includes("bytes")).toBe(true);
+    expect(restored.some((item) => item.origin === "recording")).toBe(true);
   });
 
   it("追加復元では既存データを上書きせずIDを再割当する", async () => {
