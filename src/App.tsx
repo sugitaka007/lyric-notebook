@@ -7,6 +7,7 @@ import { EMPTY_WORKSPACE } from "./types";
 import { Home } from "./components/Home";
 import { SongEditor, type SongTab } from "./components/SongEditor";
 import { DEFAULT_SETTINGS, normalizeSettings, type AppSettings } from "./settings";
+import { parseArtMemoImport } from "./artMemoImport";
 
 export type SaveState = "saved" | "saving" | "error";
 export type QueueSave = (table: Table, value: { id?: string; key?: string; songId?: string; updatedAt?: string }) => void;
@@ -111,6 +112,15 @@ export default function App() {
     } catch (error) { setNotice(storageErrorMessage(error)); }
   }
 
+  async function importInboxJson(file: File) {
+    const parsed = parseArtMemoImport(await file.text(), now());
+    const existingKeys = new Set((await db.inbox.toArray()).map((item) => item.importKey).filter(Boolean));
+    const additions = parsed.items.filter((item) => !existingKeys.has(item.importKey));
+    if (additions.length) await db.inbox.bulkAdd(additions);
+    await refreshHome();
+    return { added: additions.length, skipped: parsed.items.length - additions.length, themes: parsed.themeCount };
+  }
+
   async function updateInbox(item: InboxItem) {
     try { await db.inbox.put({ ...item, updatedAt: now() }); await refreshHome(); }
     catch (error) { setNotice(storageErrorMessage(error)); }
@@ -161,9 +171,10 @@ export default function App() {
       {activeSong ? (
         <SongEditor song={activeSong} workspace={workspace} setWorkspace={setWorkspace} settings={settings} patchSong={patchSong} queueSave={queueSave} saveState={saveState} initialTab={initialTab} focusTitle={focusSongTitle} onDelete={removeSong} onBack={async () => { setActiveSong(null); await refreshHome(); }} notify={setNotice} />
       ) : (
-        <Home songs={songs} inbox={inbox} settings={settings} onSettings={updateSettings} onResetAll={resetAllData} onOpen={openSong} onCreate={addSong} onQuickAdd={addInbox} onUpdateInbox={updateInbox} onDeleteInbox={deleteInbox} onMoveInbox={moveInbox} onSongFromInbox={songFromInbox} onRefresh={refreshHome} notify={setNotice} />
+        <Home songs={songs} inbox={inbox} settings={settings} onSettings={updateSettings} onResetAll={resetAllData} onOpen={openSong} onCreate={addSong} onQuickAdd={addInbox} onImportInbox={importInboxJson} onUpdateInbox={updateInbox} onDeleteInbox={deleteInbox} onMoveInbox={moveInbox} onSongFromInbox={songFromInbox} onRefresh={refreshHome} notify={setNotice} />
       )}
       {notice && <div className="toast" role="status">{notice}</div>}
     </div>
   );
 }
+

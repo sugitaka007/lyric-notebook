@@ -116,7 +116,7 @@ function remapForMerge(data: Awaited<ReturnType<typeof parseBackup>>["data"]) {
   return {
     songs: data.songs.map((x) => ({ ...x, id: songId(x.id), title: `${x.title}（復元）` })),
     sections: data.sections.map((x) => ({ ...x, id: maps.section.get(x.id)!, songId: songId(x.songId) })),
-    lyricLines: data.lyricLines.map((x) => ({ ...x, id: maps.lyric.get(x.id)!, songId: songId(x.songId), sectionId: maps.section.get(x.sectionId) ?? x.sectionId })),
+    lyricLines: data.lyricLines.map((x) => ({ ...x, id: maps.lyric.get(x.id)!, songId: songId(x.songId), sectionId: maps.section.get(x.sectionId) ?? x.sectionId, ideaIds: (x.ideaIds ?? []).map((id) => maps.idea.get(id) ?? id) })),
     ideas: data.ideas.map((x) => ({ ...x, id: maps.idea.get(x.id)!, songId: songId(x.songId), assetIds: (x.assetIds ?? []).map((id) => maps.media.get(id) ?? id) })),
     associations: data.associations.map((x) => ({ ...x, id: maps.association.get(x.id)!, songId: songId(x.songId), relatedLyricId: x.relatedLyricId ? maps.lyric.get(x.relatedLyricId) : undefined, imageAssetId: x.imageAssetId ? maps.media.get(x.imageAssetId) : undefined })),
     mvScenes: data.mvScenes.map((x) => ({ ...x, id: maps.scene.get(x.id)!, songId: songId(x.songId), relatedLyricIds: x.relatedLyricIds.map((id) => maps.lyric.get(id) ?? id), referenceAssetIds: x.referenceAssetIds.map((id) => maps.media.get(id) ?? id) })),
@@ -142,3 +142,4 @@ export async function restoreBackup(file: Blob, mode: "merge" | "replace") {
   await normalizeRestoredData();
   return parsed.manifest;
 }
+

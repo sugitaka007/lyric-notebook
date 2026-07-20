@@ -2,7 +2,7 @@ import Dexie, { type EntityTable } from "dexie";
 import type { AppMeta, AssociationCard, Idea, IdeaCategory, InboxItem, LyricLine, LyricSection, MediaAsset, MVScene, SketchRecord, Song, SongWorkspace } from "./types";
 
 export const DB_NAME = "yohaku-lyric-notebook";
-export const DB_VERSION = 4;
+export const DB_VERSION = 5;
 export const STORES_V1 = {
   songs: "id, updatedAt, createdAt, stage, *tags",
   sections: "id, songId, [songId+order]",
@@ -21,6 +21,7 @@ export const STORES_V3 = {
   inbox: "id, kind, createdAt, updatedAt, deletedAt",
 };
 export const STORES_V4 = { ...STORES_V3, ideas: "id, songId, category, updatedAt" };
+export const STORES_V5 = { ...STORES_V4, inbox: "id, kind, createdAt, updatedAt, deletedAt, importKey, theme" };
 
 const legacyTableNames = Object.keys(STORES_V2);
 
@@ -62,6 +63,35 @@ export class LyricDatabase extends Dexie {
         if (!sketch.promptFields || typeof sketch.promptFields !== "object") sketch.promptFields = {};
       });
     });
+    this.version(5).stores(STORES_V5).upgrade(async (tx) => {
+      const sections = await tx.table("sections").toArray() as LyricSection[];
+      const existingLines = await tx.table("lyricLines").toArray() as LyricLine[];
+      const linesBySection = new Map<string, LyricLine[]>();
+      for (const line of existingLines) linesBySection.set(line.sectionId, [...(linesBySection.get(line.sectionId) ?? []), line]);
+      const stamp = new Date().toISOString();
+      const migratedLines: LyricLine[] = [];
+      const reconciledLines: LyricLine[] = [];
+      const removedLineIds: string[] = [];
+      for (const section of sections) {
+        const texts = typeof section.body === "string" && section.body.length > 0 ? section.body.split(/\r?\n/) : [""];
+        const current = (linesBySection.get(section.id) ?? []).sort((a, b) => a.order - b.order);
+        if (current.length === 0) {
+          texts.forEach((text, order) => migratedLines.push({ id: uid(), songId: section.songId, sectionId: section.id, text, status: "仮採用", alternate: "", rhymes: "", ideaIds: [], note: "", order, createdAt: stamp, updatedAt: stamp }));
+        } else if (typeof section.body === "string" && current.map((line) => line.text).join("\n") !== section.body) {
+          texts.forEach((text, order) => reconciledLines.push(current[order] ? { ...current[order], text, order, updatedAt: stamp } : { id: uid(), songId: section.songId, sectionId: section.id, text, status: "仮採用", alternate: "", rhymes: "", ideaIds: [], note: "", order, createdAt: stamp, updatedAt: stamp }));
+          removedLineIds.push(...current.slice(texts.length).map((line) => line.id));
+        }
+      }
+      if (migratedLines.length) await tx.table("lyricLines").bulkAdd(migratedLines);
+      if (reconciledLines.length) await tx.table("lyricLines").bulkPut(reconciledLines);
+      if (removedLineIds.length) await tx.table("lyricLines").bulkDelete(removedLineIds);
+      await tx.table("lyricLines").toCollection().modify((line: Partial<LyricLine>) => {
+        if (typeof line.alternate !== "string") line.alternate = "";
+        if (typeof line.rhymes !== "string") line.rhymes = "";
+        if (!Array.isArray(line.ideaIds)) line.ideaIds = [];
+        if (typeof line.note !== "string") line.note = "";
+      });
+    });
   }
 }
 
@@ -84,7 +114,9 @@ export function emptySong(title = "無題の曲"): Song {
 
 export async function createSong(title?: string) {
   const song = emptySong(title); const section: LyricSection = { id: uid(), songId: song.id, name: "セクション 1", body: "", order: 0 };
-  await db.transaction("rw", [db.songs, db.sections], async () => { await db.songs.add(song); await db.sections.add(section); });
+  const stamp = now();
+  const line: LyricLine = { id: uid(), songId: song.id, sectionId: section.id, text: "", status: "仮採用", alternate: "", rhymes: "", ideaIds: [], note: "", order: 0, createdAt: stamp, updatedAt: stamp };
+  await db.transaction("rw", [db.songs, db.sections, db.lyricLines], async () => { await db.songs.add(song); await db.sections.add(section); await db.lyricLines.add(line); });
   return song;
 }
 
@@ -125,7 +157,7 @@ export async function duplicateSong(sourceId: string) {
   const ideaIds = new Map(data.ideas.map((item) => [item.id, uid()])); const cardIds = new Map(data.associations.map((item) => [item.id, uid()]));
   const sceneIds = new Map(data.scenes.map((item) => [item.id, uid()])); const mediaIds = new Map(data.media.map((item) => [item.id, uid()]));
   const sections = data.sections.map((item) => ({ ...item, id: sectionIds.get(item.id)!, songId }));
-  const lines = data.lines.map((item) => ({ ...item, id: lineIds.get(item.id)!, songId, sectionId: sectionIds.get(item.sectionId)! }));
+  const lines = data.lines.map((item) => ({ ...item, id: lineIds.get(item.id)!, songId, sectionId: sectionIds.get(item.sectionId)!, ideaIds: (item.ideaIds ?? []).map((id) => ideaIds.get(id) ?? id) }));
   const ideas = data.ideas.map((item) => ({ ...item, id: ideaIds.get(item.id)!, songId, assetIds: item.assetIds.map((id) => mediaIds.get(id) ?? id) }));
   const associations = data.associations.map((item) => ({ ...item, id: cardIds.get(item.id)!, songId, relatedLyricId: item.relatedLyricId ? lineIds.get(item.relatedLyricId) : undefined, imageAssetId: item.imageAssetId ? mediaIds.get(item.imageAssetId) : undefined }));
   const scenes = data.scenes.map((item) => ({ ...item, id: sceneIds.get(item.id)!, songId, relatedLyricIds: item.relatedLyricIds.map((id) => lineIds.get(id) ?? id), referenceAssetIds: item.referenceAssetIds.map((id) => mediaIds.get(id) ?? id) }));
@@ -142,6 +174,16 @@ export async function normalizeRestoredData() {
   const ideaIds = new Set(existingIdeas.map((item) => item.id)); const linesBySection = new Map<string, LyricLine[]>();
   for (const line of lines) { const items = linesBySection.get(line.sectionId) ?? []; items.push(line); linesBySection.set(line.sectionId, items); }
   const normalizedSections = sections.map((section) => ({ ...section, body: typeof section.body === "string" ? section.body : (linesBySection.get(section.id) ?? []).sort((a, b) => a.order - b.order).map((line) => line.text).join("\n") }));
+  const stamp = now(); const migratedLines: LyricLine[] = []; const reconciledLines: LyricLine[] = []; const removedLineIds: string[] = [];
+  for (const section of normalizedSections) {
+    const texts = section.body.length > 0 ? section.body.split(/\r?\n/) : [""];
+    const current = (linesBySection.get(section.id) ?? []).sort((a, b) => a.order - b.order);
+    if (current.length === 0) texts.forEach((text, order) => migratedLines.push({ id: uid(), songId: section.songId, sectionId: section.id, text, status: "仮採用", alternate: "", rhymes: "", ideaIds: [], note: "", order, createdAt: stamp, updatedAt: stamp }));
+    else if (current.map((line) => line.text).join("\n") !== section.body) {
+      texts.forEach((text, order) => reconciledLines.push(current[order] ? { ...current[order], text, order, updatedAt: stamp } : { id: uid(), songId: section.songId, sectionId: section.id, text, status: "仮採用", alternate: "", rhymes: "", ideaIds: [], note: "", order, createdAt: stamp, updatedAt: stamp }));
+      removedLineIds.push(...current.slice(texts.length).map((line) => line.id));
+    }
+  }
   const migratedIdeas: Idea[] = [];
   for (const card of associations) {
     const id = `legacy-association-${card.id}`; if (ideaIds.has(id)) continue;
@@ -151,8 +193,12 @@ export async function normalizeRestoredData() {
     const id = `legacy-scene-${scene.id}`; if (ideaIds.has(id)) continue;
     migratedIdeas.push({ id, songId: scene.songId, text: [scene.name, scene.action, scene.note].filter(Boolean).join("\n"), category: "映像", assetIds: scene.referenceAssetIds, legacySceneId: scene.id, createdAt: scene.createdAt, updatedAt: scene.updatedAt }); ideaIds.add(id);
   }
-  await db.transaction("rw", [db.sections, db.ideas, db.sketches, db.media, db.inbox], async () => {
+  await db.transaction("rw", [db.sections, db.lyricLines, db.ideas, db.sketches, db.media, db.inbox], async () => {
     await db.sections.bulkPut(normalizedSections); if (migratedIdeas.length) await db.ideas.bulkAdd(migratedIdeas);
+    if (migratedLines.length) await db.lyricLines.bulkAdd(migratedLines);
+    if (reconciledLines.length) await db.lyricLines.bulkPut(reconciledLines);
+    if (removedLineIds.length) await db.lyricLines.bulkDelete(removedLineIds);
+    await db.lyricLines.toCollection().modify((line: LyricLine) => { line.alternate = line.alternate ?? ""; line.rhymes = line.rhymes ?? ""; line.ideaIds = line.ideaIds ?? []; line.note = line.note ?? ""; });
     await db.ideas.toCollection().modify((idea: Idea) => { delete idea.pinned; delete idea.sourceExcerpt; if (!Array.isArray(idea.assetIds)) idea.assetIds = []; });
     await db.sketches.bulkPut(sketches.map((sketch) => ({ ...sketch, strokes: sketch.strokes ?? [], texts: sketch.texts ?? [], arrows: sketch.arrows ?? [], guideVisible: sketch.guideVisible ?? true, guideInExport: sketch.guideInExport ?? false, backgroundColor: sketch.backgroundColor ?? "#fffdf9", promptFields: sketch.promptFields ?? {} })));
     await db.media.bulkPut(media.map((item) => ({ ...item, note: item.note ?? "" })));
@@ -170,3 +216,4 @@ export async function moveOrdered<T extends { id: string; order: number }>(table
   const reordered = [...items]; const [moved] = reordered.splice(from, 1); reordered.splice(to, 0, moved);
   const updated = reordered.map((item, order) => ({ ...item, order })); await table.bulkPut(updated); return updated;
 }
+

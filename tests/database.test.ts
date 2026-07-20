@@ -1,6 +1,6 @@
 import Dexie from "dexie";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { createSong, db, deleteSongCascade, loadWorkspace, LyricDatabase, moveInboxToSong, moveOrdered, now, STORES_V2, STORES_V3, uid } from "../src/db";
+import { createSong, db, deleteSongCascade, loadWorkspace, LyricDatabase, moveInboxToSong, moveOrdered, now, STORES_V2, STORES_V3, STORES_V4, uid } from "../src/db";
 import type { InboxItem, MVScene, SketchRecord, Song } from "../src/types";
 
 beforeEach(async () => { await db.delete(); await db.open(); });
@@ -13,6 +13,7 @@ describe("曲・メモ・素材", () => {
     expect(song.title).toBe("無題の曲");
     expect(workspace.sections).toHaveLength(1);
     expect(workspace.sections[0].body).toBe("");
+    expect(workspace.lines).toHaveLength(1);
     await db.sections.update(workspace.sections[0].id, { body: "一行目\n二行目" });
     await db.close(); await db.open();
     expect((await loadWorkspace(song.id)).sections[0].body).toBe("一行目\n二行目");
@@ -80,4 +81,25 @@ describe("データベース更新", () => {
     const sketch = await migrated.sketches.get("sketch"); expect(sketch?.texts).toEqual([]); expect(sketch?.arrows).toEqual([]); expect(sketch?.guideVisible).toBe(true);
     await migrated.delete();
   });
+
+  it("v4からv5への更新でセクション本文を固有ID付きの歌詞行へ移行する", async () => {
+    const name = `lines-${uid()}`; const legacy = new Dexie(name); legacy.version(4).stores(STORES_V4); const stamp = now();
+    const song = { id: uid(), title: "移行する曲", stage: "制作中", tags: [], archived: false, createdAt: stamp, updatedAt: stamp } as unknown as Song;
+    await legacy.table("songs").add(song);
+    await legacy.table("sections").add({ id: "section", songId: song.id, name: "Aメロ", order: 0, body: "一行目\n二行目" });
+    await legacy.table("lyricLines").add({ id: "existing-line", songId: song.id, sectionId: "section", text: "編集前", status: "採用", alternate: "別案", note: "", order: 0, createdAt: stamp, updatedAt: stamp });
+    await legacy.table("inbox").add({ id: "memo", kind: "note", text: "残すメモ", createdAt: stamp, updatedAt: stamp });
+    legacy.close();
+    const migrated = new LyricDatabase(name); await migrated.open();
+    const lines = await migrated.lyricLines.where("sectionId").equals("section").sortBy("order");
+    expect(lines.map((line) => line.text)).toEqual(["一行目", "二行目"]);
+    expect(lines[0].id).toBe("existing-line");
+    expect(lines[0].alternate).toBe("別案");
+    expect(lines.every((line) => Boolean(line.id) && line.rhymes === "" && Array.isArray(line.ideaIds))).toBe(true);
+    expect((await migrated.inbox.get("memo"))?.text).toBe("残すメモ");
+    migrated.close(); await migrated.open();
+    expect(await migrated.lyricLines.where("sectionId").equals("section").count()).toBe(2);
+    await migrated.delete();
+  });
 });
+

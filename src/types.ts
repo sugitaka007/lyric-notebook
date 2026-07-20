@@ -15,7 +15,7 @@ export interface Song {
 export interface LyricSection { id: string; songId: string; name: string; order: number; body: string; }
 export interface LyricLine {
   id: string; songId: string; sectionId: string; text: string; status: LyricStatus;
-  alternate: string; note: string; order: number; createdAt: string; updatedAt: string;
+  alternate: string; rhymes?: string; ideaIds?: string[]; note: string; order: number; createdAt: string; updatedAt: string;
 }
 export interface AssociationCard {
   id: string; songId: string; category: AssociationCategory; text: string; color: string;
@@ -54,6 +54,7 @@ export interface MediaAsset {
 export interface InboxItem {
   id: string; kind: "note" | "lyric" | "mv" | "audio" | "image"; text: string;
   assetId?: string; assetIds?: string[]; deletedAt?: string; createdAt: string; updatedAt?: string;
+  theme?: string; sourceType?: string; tags?: string[]; sourceOrder?: number; themeOrder?: number; importKey?: string;
 }
 export interface AppMeta { key: string; value: unknown; }
 export interface SongWorkspace {
@@ -61,3 +62,4 @@ export interface SongWorkspace {
   scenes: MVScene[]; sketches: SketchRecord[]; media: MediaAsset[];
 }
 export const EMPTY_WORKSPACE: SongWorkspace = { sections: [], lines: [], ideas: [], associations: [], scenes: [], sketches: [], media: [] };
+
