@@ -73,7 +73,7 @@ export interface MediaAsset {
   size: number; durationSeconds?: number; url?: string; links: MediaLink[]; createdAt: string; updatedAt: string;
 }
 export interface InboxItem {
-  id: string; kind: "note" | "lyric" | "mv" | "audio" | "image"; text: string;
+  id: string; kind: "note" | "lyric" | "mv" | "audio" | "image" | "sketch"; text: string;
   assetId?: string; assetIds?: string[]; deletedAt?: string; createdAt: string; updatedAt?: string;
   theme?: string; sourceType?: string; tags?: string[]; sourceOrder?: number; themeOrder?: number; importKey?: string;
   usedSongIds?: string[];

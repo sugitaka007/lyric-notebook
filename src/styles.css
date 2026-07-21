@@ -400,13 +400,17 @@ h1,h2,h3 { font-family:inherit; letter-spacing:0; }
 .quick-composer { margin-top:18px; }
 .quick-composer h2,.memo-section h2,.library-section h2 { margin:0; font-size:20px; }
 .quick-composer>textarea { min-height:64px; max-height:120px; margin-top:10px; border-radius:10px; background:var(--paper); font-size:17px; line-height:1.5; }
-.quick-actions { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-top:8px; }
+.quick-actions { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; margin-top:8px; }
 .quick-actions button { min-width:0; padding:6px; font-size:13px; }
 .quick-actions .recording { border-color:var(--danger); color:var(--danger); }
 .attachment-list { margin:8px 0 0; padding:0; list-style:none; }
-.attachment-list li { display:grid; grid-template-columns:minmax(0,1fr) 44px; min-height:44px; align-items:center; border-bottom:1px solid var(--line); font-size:13px; }
-.attachment-list span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.attachment-list button { border:0; background:transparent; }
+.attachment-list li { display:grid; grid-template-columns:minmax(0,1fr) 44px; min-height:44px; align-items:start; border-bottom:1px solid var(--line); font-size:13px; }
+.attachment-list li>button { min-height:44px; border:0; background:transparent; }
+.quick-attachment>div { display:grid; min-width:0; gap:5px; padding:7px 0; }
+.quick-attachment b { color:var(--muted); font-size:11px; }
+.quick-attachment audio { width:100%; height:40px; }
+.quick-image-preview { width:88px; height:66px; padding:0!important; overflow:hidden; border:1px solid var(--line); border-radius:6px; background:var(--paper-2); }
+.quick-image-preview img { width:100%; height:100%; object-fit:cover; }
 .memo-section { margin-top:32px; }
 .section-heading { display:flex; justify-content:space-between; gap:12px; }
 .section-heading>span { color:var(--muted); font-size:14px; }
@@ -416,7 +420,7 @@ h1,h2,h3 { font-family:inherit; letter-spacing:0; }
 .memo-card>summary span { display:-webkit-box; overflow:hidden; font-size:15px; line-height:1.35; white-space:pre-wrap; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
 .memo-card>summary time { color:var(--muted); font-size:10px; white-space:nowrap; }
 .memo-card[open]>summary { border-bottom:1px solid var(--line); }
-.memo-card>textarea { min-height:78px; margin:6px 8px 0; width:calc(100% - 16px); padding:7px; border:0; border-radius:0; background:var(--paper); box-shadow:none; font-size:16px; }
+.memo-card>textarea { min-height:44px; max-height:none; margin:6px 8px 0; width:calc(100% - 16px); padding:7px; overflow:hidden; border:0; border-radius:0; background:var(--paper); box-shadow:none; font-size:16px; resize:none; }
 .memo-card>small { display:block; margin:4px 12px; color:var(--muted); font-size:11px; }
 .memo-card .memo-actions { margin:6px 8px 8px; }
 .memo-actions { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:9px; }
@@ -800,6 +804,45 @@ h1,h2,h3 { font-family:inherit; letter-spacing:0; }
 .element-editor { overscroll-behavior:contain; }
 .stroke-editor { grid-template-columns:minmax(0,1fr) minmax(0,1fr); }
 body.range-adjusting { overflow:hidden; touch-action:none; }
+
+/* 録音確認・クイック素材・分類収納 */
+.audio-recorder { min-width:0; }
+.quick-actions>.audio-recorder { display:contents; }
+.audio-recorder>.record-button { width:100%; min-height:44px; }
+.recording-meter,.recording-preview { display:grid; grid-column:1/-1; gap:5px; padding:8px; border:1px solid var(--line); border-radius:8px; background:var(--paper-2); }
+.recording-meter canvas { display:block; width:100%; height:52px; border-radius:5px; background:var(--paper); }
+.recording-meter span,.recording-preview>span { color:var(--muted); font-size:11px; }
+.recording-preview audio { width:100%; height:42px; }
+.voice-page>.audio-recorder { display:grid; gap:8px; margin-bottom:12px; }
+.voice-page .recording-meter,.voice-page .recording-preview { grid-column:auto; }
+
+.regular-memo-groups { display:grid; gap:8px; margin-top:12px; }
+.memo-attachments { display:grid; gap:8px; margin:8px; }
+.memo-attachments>button { display:grid; width:100%; min-height:80px; grid-template-columns:84px minmax(0,1fr); align-items:center; gap:10px; padding:0; overflow:hidden; border-color:var(--line); background:var(--paper-2); text-align:left; }
+.memo-attachments>button img,.memo-attachments>button .image-placeholder { width:84px; height:80px; object-fit:cover; }
+.memo-attachments>button span { color:var(--muted); font-size:12px; }
+.memo-audio { display:grid; gap:5px; padding:8px; border:1px solid var(--line); border-radius:8px; background:var(--paper-2); }
+.memo-audio>span { color:var(--muted); font-size:11px; }
+.memo-audio audio { width:100%; height:42px; }
+
+.quick-sketch-backdrop { padding:max(8px,env(safe-area-inset-top)) 8px max(8px,env(safe-area-inset-bottom)); }
+.quick-sketch-modal { display:flex; width:min(100%,560px); max-height:100%; flex-direction:column; }
+.quick-sketch-tools { display:grid; grid-template-columns:72px 92px 48px minmax(0,1fr); gap:6px; align-items:center; margin-bottom:8px; }
+.quick-sketch-tools button { min-width:0; min-height:44px; padding:4px; }
+.quick-sketch-tools button.active { border-color:var(--accent); background:var(--accent-soft); }
+.quick-sketch-tools>label:not(.quick-sketch-width) { display:grid; min-height:44px; place-items:center; }
+.quick-sketch-tools input[type="color"] { width:42px; height:42px; min-height:42px; padding:2px; }
+.quick-sketch-width { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:center; gap:5px; color:var(--muted); font-size:10px; }
+.quick-sketch-width input { min-width:0; min-height:44px; padding:0; touch-action:none; }
+.quick-sketch-canvas { display:block; width:100%; aspect-ratio:16/9; border:1px solid var(--line); border-radius:4px; background:#fff; touch-action:none; }
+.quick-sketch-actions { display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; margin-top:8px; }
+.quick-sketch-actions button { min-width:0; min-height:44px; padding:4px; }
+
+@media (max-width:430px) {
+  .quick-actions { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .quick-sketch-tools { grid-template-columns:1fr 1fr 48px; }
+  .quick-sketch-width { grid-column:1/-1; }
+}
 
 .canvas-editor.fullscreen { overflow:hidden; }
 .canvas-editor.fullscreen .layer-panel { display:none; }

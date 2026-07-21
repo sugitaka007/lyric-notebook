@@ -163,7 +163,7 @@ export async function useInboxInSong(item: InboxItem, songId: string) {
   });
 }
 
-const ideaCategoryForInbox = (kind: InboxItem["kind"]): IdeaCategory | undefined => kind === "lyric" ? "言葉・歌詞" : kind === "mv" || kind === "image" ? "映像" : kind === "audio" ? "音・メロディ" : undefined;
+const ideaCategoryForInbox = (kind: InboxItem["kind"]): IdeaCategory | undefined => kind === "lyric" ? "言葉・歌詞" : kind === "mv" || kind === "image" || kind === "sketch" ? "映像" : kind === "audio" ? "音・メロディ" : undefined;
 
 export async function moveInboxToSong(item: InboxItem, songId: string) {
   const stamp = now(); const assetIds = inboxAssetIds(item); const text = item.text.trim();

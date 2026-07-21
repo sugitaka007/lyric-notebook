@@ -117,7 +117,8 @@ export default function App() {
     try {
       const stamp = now(); const assets: MediaAsset[] = [];
       for (const file of files) { const isImage = file.type.startsWith("image/"); const blob = isImage ? await compressImage(file) : file; assets.push({ id: uid(), kind: isImage ? "image" : "audio", origin: isImage ? undefined : file.name.startsWith("録音-") ? "recording" : "file", name: file.name, note: "", mimeType: blob.type || file.type, blob, size: blob.size, links: [], createdAt: stamp, updatedAt: stamp }); }
-      const item: InboxItem = { id: uid(), kind, text, assetIds: assets.map((asset) => asset.id), usedSongIds: [], createdAt: stamp, updatedAt: stamp };
+      const attachmentKind: InboxItem["kind"] | undefined = files.some((file) => file.name.startsWith("スケッチ-")) ? "sketch" : assets.some((asset) => asset.kind === "audio") ? "audio" : assets.length > 0 ? "image" : undefined;
+      const item: InboxItem = { id: uid(), kind: text.trim() ? kind : attachmentKind ?? kind, text, assetIds: assets.map((asset) => asset.id), usedSongIds: [], createdAt: stamp, updatedAt: stamp };
       await db.transaction("rw", [db.media, db.inbox], async () => { if (assets.length) await db.media.bulkAdd(assets); await db.inbox.add(item); }); await refreshHome(); setNotice("未整理メモに保存しました。");
     } catch (error) { setNotice(storageErrorMessage(error)); }
   }

@@ -38,6 +38,17 @@ describe("曲・メモ・素材", () => {
     expect((await loadWorkspace(song.id)).media.map((asset) => asset.id)).toContain(assetId);
   });
 
+  it("クイックスケッチを映像アイデアとして曲へ移動する", async () => {
+    const song = await createSong(); const stamp = now(); const assetId = uid();
+    await db.media.add({ id: assetId, kind: "image", name: "スケッチ-1.png", note: "", mimeType: "image/png", blob: new Blob(["png"]), size: 3, links: [], createdAt: stamp, updatedAt: stamp });
+    const memo: InboxItem = { id: uid(), kind: "sketch", text: "窓辺の構図", assetIds: [assetId], createdAt: stamp, updatedAt: stamp };
+    await db.inbox.add(memo); await moveInboxToSong(memo, song.id);
+    const idea = await db.ideas.where("songId").equals(song.id).first();
+    expect(idea?.category).toBe("映像");
+    expect(idea?.assetIds).toEqual([assetId]);
+    expect(await db.inbox.get(memo.id)).toBeUndefined();
+  });
+
   it("MV場面を並べ替えられる", async () => {
     const song = await createSong("MVテスト");
     const base = (name: string, order: number): MVScene => ({ id: uid(), songId: song.id, name, order, relatedLyricIds: [], startTime: "", endTime: "", characters: "", location: "", timeOfDay: "", action: "", cameraPosition: "", cameraMovement: "", lighting: "", color: "#000000", costume: "", props: "", editing: "", referenceAssetIds: [], note: "", createdAt: now(), updatedAt: now() });

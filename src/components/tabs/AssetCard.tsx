@@ -1,12 +1,6 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { MediaAsset } from "../../types";
-import { BlobImage } from "../ui";
-
-function BlobAudio({ blob }: { blob?: Blob }) {
-  const [url, setUrl] = useState("");
-  useEffect(() => { if (!blob) return; const next = URL.createObjectURL(blob); setUrl(next); return () => URL.revokeObjectURL(next); }, [blob]);
-  return url ? <audio controls preload="metadata" src={url} /> : <p>音声データがありません。</p>;
-}
+import { BlobAudio, BlobImage } from "../ui";
 
 export function AssetCard({ asset, onPatch, onDelete }: { asset: MediaAsset; onPatch(values: Partial<MediaAsset>): void; onDelete(): void }) {
   const [expanded, setExpanded] = useState(false);

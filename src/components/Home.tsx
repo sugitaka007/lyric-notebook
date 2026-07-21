@@ -2,9 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createBackupBlob, inspectBackup, restoreBackup } from "../backup";
 import { db } from "../db";
 import { downloadBlob } from "../media";
-import type { InboxItem, Song } from "../types";
+import type { InboxItem, MediaAsset, Song } from "../types";
 import { GPT_REQUEST_OPTIONS, type AppSettings, type GptRequestId } from "../settings";
+import { AudioRecorder } from "./AudioRecorder";
 import { GptCopySheet, type CopyPhrase } from "./GptCopySheet";
+import { QuickSketch } from "./QuickSketch";
+import { BlobAudio, BlobImage } from "./ui";
 
 type Props = {
   songs: Song[];
@@ -32,10 +35,30 @@ const formatBytes = (bytes: number) => {
   return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
 };
 
-const MEMO_KIND_LABELS: Record<InboxItem["kind"], string> = { note: "未分類", lyric: "作詞", mv: "MV案", audio: "音・メロディ", image: "画像" };
+const MEMO_KIND_LABELS: Record<InboxItem["kind"], string> = { note: "未分類", lyric: "作詞", mv: "MV案", audio: "音・メロディ", image: "画像", sketch: "スケッチ" };
+const REGULAR_GROUP_ORDER = ["作詞", "MV案", "音・メロディ", "音声", "画像", "スケッチ", "未分類"];
 
-function MemoCard({ item, songs, selection, newSongTitle, onSelection, onNewSongTitle, onUpdate, onMove, onNewSong, onCopy, onRemove }: {
-  item: InboxItem; songs: Song[]; selection: string; newSongTitle: string;
+function inboxGroupLabel(item: InboxItem, assets: MediaAsset[] = []) {
+  if (!item.text.trim() && (item.kind === "sketch" || assets.some((asset) => asset.name.startsWith("スケッチ-")))) return "スケッチ";
+  if (!item.text.trim() && assets.some((asset) => asset.kind === "audio")) return "音声";
+  if (!item.text.trim() && assets.some((asset) => asset.kind === "image")) return "画像";
+  if (item.kind === "audio" && !item.text.trim()) return "音声";
+  return MEMO_KIND_LABELS[item.kind];
+}
+
+function FilePreview({ file, onRemove }: { file: File; onRemove(): void }) {
+  const [url, setUrl] = useState(""); const [expanded, setExpanded] = useState(false);
+  useEffect(() => { const next = URL.createObjectURL(file); setUrl(next); return () => URL.revokeObjectURL(next); }, [file]);
+  const image = file.type.startsWith("image/"); const label = file.name.startsWith("スケッチ-") ? "スケッチ" : image ? "画像" : "音声";
+  return <li className={`quick-attachment ${image ? "image" : "audio"}`}>
+    <div><b>{label}</b>{image ? <button type="button" className="quick-image-preview" onClick={() => setExpanded(true)} aria-label={`${file.name}を拡大`}>{url && <img src={url} alt={file.name} />}</button> : url && <audio controls preload="metadata" src={url} />}</div>
+    <button type="button" onClick={onRemove} aria-label={`${file.name}を外す`}>×</button>
+    {expanded && <div className="photo-lightbox" onClick={() => setExpanded(false)} role="dialog" aria-modal="true"><button aria-label="閉じる">×</button><img src={url} alt={file.name} /></div>}
+  </li>;
+}
+
+function MemoCard({ item, assets, songs, selection, newSongTitle, onSelection, onNewSongTitle, onUpdate, onMove, onNewSong, onCopy, onRemove }: {
+  item: InboxItem; assets: MediaAsset[]; songs: Song[]; selection: string; newSongTitle: string;
   onSelection(value: string): void; onNewSongTitle(value: string): void;
   onUpdate(item: InboxItem): Promise<void>; onMove(item: InboxItem, songId: string): Promise<void>;
   onNewSong(item: InboxItem, title: string): Promise<void>; onCopy(item: InboxItem): void; onRemove(item: InboxItem): Promise<void>;
@@ -44,11 +67,16 @@ function MemoCard({ item, songs, selection, newSongTitle, onSelection, onNewSong
   const latestItem = useRef(item); const draftRef = useRef(item.text); const dirty = useRef(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const saveChain = useRef<Promise<void>>(Promise.resolve()); const updateRef = useRef(onUpdate);
+  const textarea = useRef<HTMLTextAreaElement>(null); const [expandedAsset, setExpandedAsset] = useState<MediaAsset>();
+
+  function resizeTextarea() { const element = textarea.current; if (!element) return; element.style.height = "auto"; element.style.height = `${element.scrollHeight}px`; }
 
   useEffect(() => {
     latestItem.current = item; updateRef.current = onUpdate;
     if (!dirty.current) { draftRef.current = item.text; setDraft(item.text); }
   }, [item, onUpdate]);
+
+  useEffect(() => { resizeTextarea(); }, [draft]);
 
   useEffect(() => () => {
     if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -65,6 +93,7 @@ function MemoCard({ item, songs, selection, newSongTitle, onSelection, onNewSong
 
   function edit(value: string) {
     draftRef.current = value; dirty.current = true; setDraft(value);
+    requestAnimationFrame(resizeTextarea);
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => { saveTimer.current = undefined; void persist(value).catch(() => undefined); }, 500);
   }
@@ -81,20 +110,22 @@ function MemoCard({ item, songs, selection, newSongTitle, onSelection, onNewSong
   async function remove() { if (saveTimer.current) clearTimeout(saveTimer.current); dirty.current = false; await saveChain.current.catch(() => undefined); await onRemove({ ...latestItem.current, text: draftRef.current }); }
   const usedSongs = songs.filter((song) => (item.usedSongIds ?? []).includes(song.id));
 
-  return <details className="memo-card">
-    <summary><span>{draft.trim() || "添付メモ"}</span><span className="memo-summary-meta"><i>{item.sourceType || MEMO_KIND_LABELS[item.kind]}</i><time>{formatDate(item.updatedAt ?? item.createdAt)}</time></span></summary>
-    <textarea rows={3} aria-label="未整理メモの内容" value={draft} onChange={(event) => edit(event.target.value)} onBlur={() => void flush().catch(() => undefined)} />
+  const label = inboxGroupLabel({ ...item, text: draft }, assets);
+  return <details className="memo-card" onToggle={(event) => { if (event.currentTarget.open) requestAnimationFrame(resizeTextarea); }}>
+    <summary><span>{draft.trim() || label}</span><span className="memo-summary-meta"><i>{item.sourceType || label}</i><time>{formatDate(item.updatedAt ?? item.createdAt)}</time></span></summary>
+    <textarea ref={textarea} rows={1} aria-label="未整理メモの内容" value={draft} onChange={(event) => edit(event.target.value)} onBlur={() => void flush().catch(() => undefined)} placeholder="メモを追加" />
     {item.tags && item.tags.length > 0 && <div className="memo-tags">{item.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>}
-    {(item.assetIds?.length || item.assetId) && <small>添付あり</small>}
+    {assets.length > 0 && <div className="memo-attachments">{assets.map((asset) => asset.kind === "image" ? <button type="button" key={asset.id} onClick={() => setExpandedAsset(asset)} aria-label={`${asset.name}を拡大`}><BlobImage blob={asset.blob} alt={asset.name} /><span>{item.kind === "sketch" ? "スケッチ" : "画像"}</span></button> : asset.kind === "audio" ? <div className="memo-audio" key={asset.id}><span>音声</span><BlobAudio blob={asset.blob} label={asset.name} /></div> : null)}</div>}
     {usedSongs.length > 0 && <p className="memo-usage">使用中：{usedSongs.map((song) => song.title).join("、")}</p>}
     <div className="memo-actions">
-      {!item.importKey && <select aria-label="メモの分類" value={item.kind} onChange={(event) => void changeKind(event.target.value as InboxItem["kind"])}><option value="note">未分類</option><option value="lyric">作詞</option><option value="mv">MV案</option><option value="audio">音・メロディ</option></select>}
+      {!item.importKey && <select aria-label="メモの分類" value={item.kind} onChange={(event) => void changeKind(event.target.value as InboxItem["kind"])}><option value="note">未分類</option><option value="lyric">作詞</option><option value="mv">MV案</option><option value="audio">{label === "音声" ? "音声" : "音・メロディ"}</option><option value="image">画像</option><option value="sketch">スケッチ</option></select>}
       <select aria-label="移動先の曲" value={selection} onChange={(event) => onSelection(event.target.value)}><option value="">曲を選択</option>{songs.map((song) => <option key={song.id} value={song.id}>{song.title}</option>)}<option value="__new__">＋ 新しい曲を作る</option></select>
       {selection === "__new__" && <input aria-label="新しい曲名" value={newSongTitle} onChange={(event) => onNewSongTitle(event.target.value)} placeholder="曲名" />}
       <button disabled={!selection || (selection === "__new__" && !newSongTitle.trim())} onClick={() => void move()}>曲へ移動</button>
       {draft.trim() && <button onClick={() => onCopy({ ...latestItem.current, text: draftRef.current })}>GPT用にコピー</button>}
       <button className="danger-text" onClick={() => void remove()}>削除</button>
     </div>
+    {expandedAsset && <div className="photo-lightbox" onClick={() => setExpandedAsset(undefined)} role="dialog" aria-modal="true"><button aria-label="閉じる">×</button><BlobImage blob={expandedAsset.blob} alt={expandedAsset.name} /></div>}
   </details>;
 }
 
@@ -103,11 +134,13 @@ export function Home(props: Props) {
   const [quickKind, setQuickKind] = useState<InboxItem["kind"]>("note");
   const [files, setFiles] = useState<File[]>([]);
   const [saving, setSaving] = useState(false);
-  const [recording, setRecording] = useState(false);
-  const [recordSeconds, setRecordSeconds] = useState(0);
+  const [recorderResetKey, setRecorderResetKey] = useState(0);
+  const [quickSketchOpen, setQuickSketchOpen] = useState(false);
+  const [inboxAssets, setInboxAssets] = useState<MediaAsset[]>([]);
   const [memoSearch, setMemoSearch] = useState("");
   const [importing, setImporting] = useState(false);
   const [openMemoGroups, setOpenMemoGroups] = useState<string[]>([]);
+  const [openRegularGroups, setOpenRegularGroups] = useState<string[]>([]);
   const [importsOpen, setImportsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [storageInfo, setStorageInfo] = useState<{ usage: number; quota?: number }>();
@@ -121,16 +154,19 @@ export function Home(props: Props) {
   const imageInput = useRef<HTMLInputElement>(null);
   const importInput = useRef<HTMLInputElement>(null);
   const restoreInput = useRef<HTMLInputElement>(null);
-  const recorder = useRef<MediaRecorder | undefined>(undefined);
-  const chunks = useRef<Blob[]>([]);
-  const recordingTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
   const standalone = window.matchMedia("(display-mode: standalone)").matches || Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
 
   useEffect(() => {
     void db.meta.get("lastBackupAt").then((item) => setLastBackupAt(typeof item?.value === "string" ? item.value : undefined));
-    return () => { if (recordingTimer.current) clearInterval(recordingTimer.current); recorder.current?.stream.getTracks().forEach((track) => track.stop()); };
   }, []);
+
+  useEffect(() => {
+    let active = true; const ids = Array.from(new Set(props.inbox.flatMap((item) => [...(item.assetIds ?? []), ...(item.assetId ? [item.assetId] : [])])));
+    if (!ids.length) { setInboxAssets([]); return; }
+    void db.media.bulkGet(ids).then((items) => { if (active) setInboxAssets(items.filter((item): item is MediaAsset => Boolean(item))); });
+    return () => { active = false; };
+  }, [props.inbox]);
 
   useEffect(() => {
     if (!settingsOpen || !navigator.storage?.estimate) return;
@@ -144,6 +180,14 @@ export function Home(props: Props) {
   const visibleSongs = useMemo(() => [...props.songs].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), [props.songs]);
   const regularMemos = useMemo(() => props.inbox.filter((item) => !item.importKey), [props.inbox]);
   const importedMemos = useMemo(() => props.inbox.filter((item) => item.importKey), [props.inbox]);
+  const regularGroups = useMemo(() => {
+    const groups = new Map<string, InboxItem[]>();
+    for (const item of regularMemos) {
+      const ids = new Set([...(item.assetIds ?? []), ...(item.assetId ? [item.assetId] : [])]); const assets = inboxAssets.filter((asset) => ids.has(asset.id));
+      const name = inboxGroupLabel(item, assets); groups.set(name, [...(groups.get(name) ?? []), item]);
+    }
+    return [...groups.entries()].map(([name, items]) => ({ name, items })).sort((a, b) => REGULAR_GROUP_ORDER.indexOf(a.name) - REGULAR_GROUP_ORDER.indexOf(b.name));
+  }, [inboxAssets, regularMemos]);
   const filteredImports = useMemo(() => {
     const query = memoSearch.trim().toLowerCase();
     if (!query) return importedMemos;
@@ -161,7 +205,11 @@ export function Home(props: Props) {
   async function saveMemo() {
     if (!text.trim() && files.length === 0) return;
     setSaving(true);
-    try { await props.onQuickAdd(text, files, quickKind); setText(""); setFiles([]); }
+    try {
+      const nextKind: InboxItem["kind"] = text.trim() ? quickKind : files.some((file) => file.name.startsWith("スケッチ-")) ? "sketch" : files.some((file) => !file.type.startsWith("image/")) ? "audio" : files.length ? "image" : quickKind;
+      await props.onQuickAdd(text, files, quickKind); setText(""); setFiles([]); setRecorderResetKey((value) => value + 1);
+      const group = inboxGroupLabel({ id: "preview", kind: nextKind, text, createdAt: new Date().toISOString() }); setOpenRegularGroups((current) => Array.from(new Set([...current, group])));
+    }
     finally { setSaving(false); }
   }
 
@@ -173,33 +221,6 @@ export function Home(props: Props) {
       props.notify(result.added > 0 ? `${result.added}件を${result.themes}テーマに分けて追加しました。${result.skipped ? ` 重複${result.skipped}件は追加していません。` : ""}` : "このファイルのメモはすべて取込済みです。");
     } catch (error) { props.notify(error instanceof Error ? error.message : "JSONを取り込めませんでした。"); }
     finally { setImporting(false); if (importInput.current) importInput.current.value = ""; }
-  }
-
-  async function startRecording() {
-    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") { props.notify("この環境では直接録音できません。曲の「音声」からファイルを追加してください。"); return; }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const supported = ["audio/mp4", "audio/webm;codecs=opus", "audio/webm"].find((type) => MediaRecorder.isTypeSupported(type));
-      const next = supported ? new MediaRecorder(stream, { mimeType: supported }) : new MediaRecorder(stream);
-      chunks.current = [];
-      next.ondataavailable = (event) => { if (event.data.size) chunks.current.push(event.data); };
-      next.onstop = () => {
-        const mime = next.mimeType || chunks.current[0]?.type || "audio/webm";
-        const extension = mime.includes("mp4") ? "m4a" : "webm";
-        const blob = new Blob(chunks.current, { type: mime });
-        setFiles((current) => [...current, new File([blob], `録音-${Date.now()}.${extension}`, { type: mime })]);
-        stream.getTracks().forEach((track) => track.stop());
-      };
-      recorder.current = next;
-      next.start(1000);
-      setRecordSeconds(0); setRecording(true);
-      recordingTimer.current = setInterval(() => setRecordSeconds((value) => value + 1), 1000);
-    } catch (error) { props.notify(error instanceof DOMException && error.name === "NotAllowedError" ? "マイクの使用を許可してください。" : "録音を開始できませんでした。"); }
-  }
-
-  function stopRecording() {
-    recorder.current?.stop(); setRecording(false);
-    if (recordingTimer.current) clearInterval(recordingTimer.current);
   }
 
   async function removeMemo(item: InboxItem) {
@@ -251,7 +272,8 @@ export function Home(props: Props) {
 
   function memoCard(item: InboxItem) {
     const selection = selectedSongs[item.id] ?? "";
-    return <MemoCard key={item.id} item={item} songs={visibleSongs} selection={selection} newSongTitle={newSongTitles[item.id] ?? ""} onSelection={(value) => setSelectedSongs((current) => ({ ...current, [item.id]: value }))} onNewSongTitle={(value) => setNewSongTitles((current) => ({ ...current, [item.id]: value }))} onUpdate={props.onUpdateInbox} onMove={props.onMoveInbox} onNewSong={props.onSongFromInbox} onCopy={(current) => openCopy(current.id, { id: current.id, text: current.text })} onRemove={removeMemo} />;
+    const ids = new Set([...(item.assetIds ?? []), ...(item.assetId ? [item.assetId] : [])]);
+    return <MemoCard key={item.id} item={item} assets={inboxAssets.filter((asset) => ids.has(asset.id))} songs={visibleSongs} selection={selection} newSongTitle={newSongTitles[item.id] ?? ""} onSelection={(value) => setSelectedSongs((current) => ({ ...current, [item.id]: value }))} onNewSongTitle={(value) => setNewSongTitles((current) => ({ ...current, [item.id]: value }))} onUpdate={props.onUpdateInbox} onMove={props.onMoveInbox} onNewSong={props.onSongFromInbox} onCopy={(current) => openCopy(current.id, { id: current.id, text: current.text })} onRemove={removeMemo} />;
   }
 
   return (
@@ -263,11 +285,12 @@ export function Home(props: Props) {
         <h2>クイック追加</h2>
         <textarea aria-label="クイック追加のメモ" value={text} onChange={(event) => setText(event.target.value)} placeholder="" rows={2} />
         <label className="quick-kind"><span>分類</span><select aria-label="クイック追加の分類" value={quickKind} onChange={(event) => setQuickKind(event.target.value as InboxItem["kind"])}><option value="note">未分類</option><option value="lyric">作詞</option><option value="mv">MV案</option><option value="audio">音・メロディ</option></select></label>
-        {files.length > 0 && <ul className="attachment-list">{files.map((file, index) => <li key={`${file.name}-${index}`}><span>{file.name}</span><button onClick={() => setFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))} aria-label={`${file.name}を外す`}>×</button></li>)}</ul>}
+        {files.length > 0 && <ul className="attachment-list">{files.map((file, index) => <FilePreview key={`${file.name}-${file.lastModified}-${index}`} file={file} onRemove={() => setFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))} />)}</ul>}
         <div className="quick-actions">
-          <button className={recording ? "recording" : ""} onClick={recording ? stopRecording : startRecording}>{recording ? `録音停止 ${recordSeconds}秒` : "音声録音"}</button>
+          <AudioRecorder resetKey={recorderResetKey} showPreview={false} onRecorded={(file) => setFiles((current) => [...current, file])} notify={props.notify} />
           <button onClick={() => imageInput.current?.click()}>画像追加</button>
           <input ref={imageInput} hidden type="file" accept="image/*" multiple onChange={(event) => { if (event.target.files) setFiles((current) => [...current, ...Array.from(event.target.files!)]); event.target.value = ""; }} />
+          <button type="button" onClick={() => setQuickSketchOpen(true)}>スケッチ</button>
           <button className="primary" disabled={saving || (!text.trim() && files.length === 0)} onClick={saveMemo}>{saving ? "保存中" : "保存"}</button>
         </div>
         {text.trim() && <button className="copy-link" onClick={() => openCopy("quick-draft", { id: "quick-draft", text: text.trim() })}>GPT用にコピー</button>}
@@ -275,7 +298,7 @@ export function Home(props: Props) {
 
       <section className="memo-section">
         <div className="section-heading memo-section-heading"><div><h2>未整理メモ</h2><span>{regularMemos.length}</span></div><button className="import-toggle" aria-expanded={importsOpen} onClick={() => setImportsOpen((open) => !open)}>取込メモ <em>{importedMemos.length}</em></button></div>
-        {regularMemos.length > 0 && <div className="memo-list">{regularMemos.map(memoCard)}</div>}
+        {regularGroups.length > 0 && <div className="memo-groups regular-memo-groups">{regularGroups.map((group) => { const expanded = openRegularGroups.includes(group.name); return <details className="memo-group" key={group.name} open={expanded} onToggle={(event) => { const open = event.currentTarget.open; setOpenRegularGroups((current) => open ? Array.from(new Set([...current, group.name])) : current.filter((name) => name !== group.name)); }}><summary><b>{group.name}</b><span>{group.items.length}</span></summary>{expanded && <div className="memo-list">{group.items.map(memoCard)}</div>}</details>; })}</div>}
         {regularMemos.length === 0 && <p className="plain-empty">未整理メモはありません。</p>}
         {importsOpen && <div className="import-library-body"><div className="memo-heading-actions"><button onClick={() => importInput.current?.click()} disabled={importing}>{importing ? "取込中" : "JSONを取り込む"}</button><input ref={importInput} hidden type="file" accept=".json,application/json" onChange={(event) => void importJson(event.target.files?.[0])} /></div>{importedMemos.length > 0 && <input className="memo-search" aria-label="取込メモを検索" value={memoSearch} onChange={(event) => setMemoSearch(event.target.value)} placeholder="取込メモを検索" />}{importGroups.length > 0 && <div className="memo-groups">{importGroups.map((group) => { const expanded = Boolean(memoSearch.trim()) || openMemoGroups.includes(group.name); return <details className="memo-group" key={group.name} open={expanded} onToggle={(event) => { if (memoSearch.trim()) return; const open = event.currentTarget.open; setOpenMemoGroups((current) => open ? Array.from(new Set([...current, group.name])) : current.filter((name) => name !== group.name)); }}><summary><b>{group.name}</b><span>{group.items.length}</span></summary>{expanded && <div className="memo-list">{group.items.map(memoCard)}</div>}</details>; })}</div>}{importedMemos.length === 0 && <p className="plain-empty">取込メモはありません。</p>}{importedMemos.length > 0 && filteredImports.length === 0 && <p className="plain-empty">一致するメモはありません。</p>}</div>}
       </section>
@@ -292,6 +315,7 @@ export function Home(props: Props) {
         <details className="settings-group"><summary>スケッチ</summary><label>初期キャンバス比率<select value={props.settings.sketchDefaultAspect} onChange={(event) => void props.onSettings({ sketchDefaultAspect: event.target.value as AppSettings["sketchDefaultAspect"] })}><option>16:9</option><option>9:16</option><option>1:1</option></select></label><label>構図ガイド<select value={props.settings.sketchGuideDefault ? "show" : "hide"} onChange={(event) => void props.onSettings({ sketchGuideDefault: event.target.value === "show" })}><option value="show">表示</option><option value="hide">非表示</option></select></label><label className="setting-color">ペンの初期色<input type="color" value={props.settings.sketchPenColor} onChange={(event) => void props.onSettings({ sketchPenColor: event.target.value })} /></label><label>ペンの初期太さ<input type="range" min="1" max="28" value={props.settings.sketchPenWidth} onChange={(event) => void props.onSettings({ sketchPenWidth: Number(event.target.value) })} /></label><label>文字の初期サイズ<select value={props.settings.sketchTextSize} onChange={(event) => void props.onSettings({ sketchTextSize: event.target.value as AppSettings["sketchTextSize"] })}><option value="small">小</option><option value="medium">中</option><option value="large">大</option></select></label><label>画像保存時の背景<select value={props.settings.sketchExportBackground} onChange={(event) => void props.onSettings({ sketchExportBackground: event.target.value as AppSettings["sketchExportBackground"] })}><option value="white">白</option><option value="current">現在の背景色</option><option value="transparent">透明</option></select></label></details>
         <details className="settings-group"><summary>データ管理</summary>{storageInfo && <div className="storage-usage"><div><span>アプリの使用容量</span><b>{formatBytes(storageInfo.usage)}</b></div>{storageInfo.quota && <><div><span>利用可能な上限</span><b>{formatBytes(storageInfo.quota)}</b></div><progress aria-label="アプリの使用容量" max={storageInfo.quota} value={storageInfo.usage} /></>}</div>}{lastBackupAt && <p>最終バックアップ：{new Date(lastBackupAt).toLocaleString("ja-JP")}</p>}<button className="primary full" onClick={exportBackup}>バックアップを書き出す</button><button className="file-picker full" onClick={() => restoreInput.current?.click()}>{restoreFile?.name || "バックアップから復元"}</button><input ref={restoreInput} hidden type="file" accept=".zip,application/zip" onChange={(event) => void chooseRestore(event.target.files?.[0])} />{restoreInfo && <><p className="restore-info">検証済み：{restoreInfo}</p><div className="segmented"><button className={restoreMode === "merge" ? "active" : ""} onClick={() => setRestoreMode("merge")}>追加</button><button className={restoreMode === "replace" ? "active" : ""} onClick={() => setRestoreMode("replace")}>置き換え</button></div><button className={restoreMode === "replace" ? "danger full" : "primary full"} onClick={runRestore}>復元する</button></>}<button className="danger full" onClick={() => void resetAll()}>すべてのデータを初期化</button></details>
       </div></div>}
+      {quickSketchOpen && <QuickSketch initialColor={props.settings.sketchPenColor} initialWidth={props.settings.sketchPenWidth} onClose={() => setQuickSketchOpen(false)} onAdd={(file) => { setFiles((current) => [...current, file]); setQuickSketchOpen(false); }} />}
       {copyRequest && <GptCopySheet {...copyRequest} settings={props.settings} onClose={() => setCopyRequest(undefined)} notify={props.notify} />}
     </main>
   );
