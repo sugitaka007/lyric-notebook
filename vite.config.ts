@@ -9,7 +9,7 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: "autoUpdate",
+      registerType: "prompt",
       includeAssets: ["apple-touch-icon.png"],
       manifest: {
         name: "アートメモ",
@@ -30,9 +30,7 @@ export default defineConfig({
       workbox: {
         globPatterns: ["**/*.{js,css,html,png,ico,webmanifest}"],
         navigateFallback: "index.html",
-        cleanupOutdatedCaches: true,
-        clientsClaim: true,
-        skipWaiting: true
+        cleanupOutdatedCaches: true
       },
       devOptions: { enabled: true }
     })

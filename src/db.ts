@@ -1,8 +1,8 @@
 import Dexie, { type EntityTable } from "dexie";
-import type { AppMeta, AssociationCard, Idea, IdeaCategory, InboxItem, LyricLine, LyricSection, MediaAsset, MVScene, SketchRecord, Song, SongWorkspace } from "./types";
+import type { AppMeta, AssociationCard, Idea, IdeaCategory, InboxItem, LyricLine, LyricSection, LyricVersion, MediaAsset, MVScene, SketchRecord, Song, SongWorkspace } from "./types";
 
 export const DB_NAME = "yohaku-lyric-notebook";
-export const DB_VERSION = 5;
+export const DB_VERSION = 6;
 export const STORES_V1 = {
   songs: "id, updatedAt, createdAt, stage, *tags",
   sections: "id, songId, [songId+order]",
@@ -22,6 +22,11 @@ export const STORES_V3 = {
 };
 export const STORES_V4 = { ...STORES_V3, ideas: "id, songId, category, updatedAt" };
 export const STORES_V5 = { ...STORES_V4, inbox: "id, kind, createdAt, updatedAt, deletedAt, importKey, theme" };
+export const STORES_V6 = {
+  ...STORES_V5,
+  ideas: "id, songId, category, sourceInboxId, updatedAt",
+  lyricVersions: "id, songId, createdAt",
+};
 
 const legacyTableNames = Object.keys(STORES_V2);
 
@@ -30,7 +35,7 @@ export class LyricDatabase extends Dexie {
   lyricLines!: EntityTable<LyricLine, "id">; associations!: EntityTable<AssociationCard, "id">;
   mvScenes!: EntityTable<MVScene, "id">; ideas!: EntityTable<Idea, "id">;
   sketches!: EntityTable<SketchRecord, "id">; media!: EntityTable<MediaAsset, "id">;
-  inbox!: EntityTable<InboxItem, "id">; meta!: EntityTable<AppMeta, "key">;
+  inbox!: EntityTable<InboxItem, "id">; lyricVersions!: EntityTable<LyricVersion, "id">; meta!: EntityTable<AppMeta, "key">;
   constructor(name = DB_NAME) {
     super(name);
     this.version(1).stores(STORES_V1);
@@ -92,6 +97,13 @@ export class LyricDatabase extends Dexie {
         if (typeof line.note !== "string") line.note = "";
       });
     });
+    this.version(6).stores(STORES_V6).upgrade(async (tx) => {
+      // 利用者の指定に基づく一度だけの再構成。JSONファイルは再取込でき、以後の起動では実行されない。
+      for (const tableName of ["songs", "sections", "lyricLines", "associations", "mvScenes", "ideas", "sketches", "media", "inbox", "lyricVersions"]) {
+        await tx.table(tableName).clear();
+      }
+      await tx.table("meta").put({ key: "v6ResetComplete", value: new Date().toISOString() });
+    });
   }
 }
 
@@ -109,11 +121,12 @@ export const now = () => new Date().toISOString();
 
 export function emptySong(title = "無題の曲"): Song {
   const stamp = now();
-  return { id: uid(), title, workingTitle: "", summary: "", protagonist: "", counterpart: "", place: "", time: "", perspective: "", baseColor: "#ffd60a", repeatedWords: "", repeatedObjects: "", avoidExpressions: "", lastingEmotion: "", stage: "種", color: "#ffd60a", tags: [], archived: false, createdAt: stamp, updatedAt: stamp };
+  return { id: uid(), title, workingTitle: "", summary: "", protagonist: "", counterpart: "", place: "", time: "", perspective: "", baseColor: "#ffd60a", repeatedWords: "", repeatedObjects: "", avoidExpressions: "", lastingEmotion: "", stage: "構想中", color: "#ffd60a", tags: [], archived: false, draft: true, createdAt: stamp, updatedAt: stamp };
 }
 
-export async function createSong(title?: string) {
-  const song = emptySong(title); const section: LyricSection = { id: uid(), songId: song.id, name: "セクション 1", body: "", order: 0 };
+export async function createSong(title?: string, draft = true) {
+  const song = { ...emptySong(title), draft };
+  const section: LyricSection = { id: uid(), songId: song.id, name: "セクション 1", body: "", order: 0 };
   const stamp = now();
   const line: LyricLine = { id: uid(), songId: song.id, sectionId: section.id, text: "", status: "仮採用", alternate: "", rhymes: "", ideaIds: [], note: "", order: 0, createdAt: stamp, updatedAt: stamp };
   await db.transaction("rw", [db.songs, db.sections, db.lyricLines], async () => { await db.songs.add(song); await db.sections.add(section); await db.lyricLines.add(line); });
@@ -121,32 +134,51 @@ export async function createSong(title?: string) {
 }
 
 export async function loadWorkspace(songId: string): Promise<SongWorkspace> {
-  const [sections, lines, ideas, associations, scenes, sketches, media] = await Promise.all([
+  const [sections, lines, ideas, associations, scenes, sketches, media, lyricVersions] = await Promise.all([
     db.sections.where("songId").equals(songId).sortBy("order"), db.lyricLines.where("songId").equals(songId).toArray(),
     db.ideas.where("songId").equals(songId).toArray(), db.associations.where("songId").equals(songId).toArray(),
     db.mvScenes.where("songId").equals(songId).sortBy("order"), db.sketches.where("songId").equals(songId).toArray(),
-    db.media.where("songId").equals(songId).toArray(),
+    db.media.where("songId").equals(songId).toArray(), db.lyricVersions.where("songId").equals(songId).reverse().sortBy("createdAt"),
   ]);
-  return { sections, lines, ideas, associations, scenes, sketches, media };
+  return { sections, lines, ideas, associations, scenes, sketches, media, lyricVersions };
 }
 
 export async function deleteSongCascade(songId: string) {
   await db.transaction("rw", db.tables, async () => {
-    await Promise.all([db.sections.where("songId").equals(songId).delete(), db.lyricLines.where("songId").equals(songId).delete(), db.ideas.where("songId").equals(songId).delete(), db.associations.where("songId").equals(songId).delete(), db.mvScenes.where("songId").equals(songId).delete(), db.sketches.where("songId").equals(songId).delete(), db.media.where("songId").equals(songId).delete()]);
+    await Promise.all([db.sections.where("songId").equals(songId).delete(), db.lyricLines.where("songId").equals(songId).delete(), db.ideas.where("songId").equals(songId).delete(), db.associations.where("songId").equals(songId).delete(), db.mvScenes.where("songId").equals(songId).delete(), db.sketches.where("songId").equals(songId).delete(), db.media.where("songId").equals(songId).delete(), db.lyricVersions.where("songId").equals(songId).delete()]);
+    await db.inbox.toCollection().modify((item: InboxItem) => { item.usedSongIds = (item.usedSongIds ?? []).filter((id) => id !== songId); });
     await db.songs.delete(songId);
   });
 }
 
 export const inboxAssetIds = (item: InboxItem) => Array.from(new Set([...(item.assetIds ?? []), ...(item.assetId ? [item.assetId] : [])]));
 
-export async function moveInboxToSong(item: InboxItem, songId: string) {
+export async function useInboxInSong(item: InboxItem, songId: string) {
   const stamp = now(); const assetIds = inboxAssetIds(item);
-  await db.transaction("rw", [db.ideas, db.media, db.inbox, db.songs], async () => {
-    if (item.text.trim()) await db.ideas.add({ id: uid(), songId, text: item.text.trim(), assetIds, createdAt: item.createdAt, updatedAt: stamp });
-    const assets = await db.media.bulkGet(assetIds);
-    await db.media.bulkPut(assets.filter((asset): asset is MediaAsset => Boolean(asset)).map((asset) => ({ ...asset, songId, updatedAt: stamp })));
-    await db.inbox.delete(item.id); await db.songs.update(songId, { updatedAt: stamp });
+  await db.transaction("rw", [db.ideas, db.inbox, db.songs], async () => {
+    const existing = await db.ideas.where("sourceInboxId").equals(item.id).and((idea) => idea.songId === songId).first();
+    if (item.text.trim() && !existing) await db.ideas.add({ id: uid(), songId, text: item.text.trim(), assetIds, sourceInboxId: item.id, createdAt: item.createdAt, updatedAt: stamp });
+    await db.inbox.update(item.id, { usedSongIds: Array.from(new Set([...(item.usedSongIds ?? []), songId])), updatedAt: stamp });
+    await db.songs.update(songId, { updatedAt: stamp, draft: false });
   });
+}
+
+export const moveInboxToSong = useInboxInSong;
+
+export async function removeInboxUse(idea: Idea) {
+  await db.transaction("rw", [db.ideas, db.inbox], async () => {
+    await db.ideas.delete(idea.id);
+    if (!idea.sourceInboxId) return;
+    const other = await db.ideas.where("sourceInboxId").equals(idea.sourceInboxId).and((item) => item.songId === idea.songId && item.id !== idea.id).count();
+    if (!other) {
+      const source = await db.inbox.get(idea.sourceInboxId);
+      if (source) await db.inbox.update(source.id, { usedSongIds: (source.usedSongIds ?? []).filter((id) => id !== idea.songId), updatedAt: now() });
+    }
+  });
+}
+
+export async function markSongUsed(songId: string) {
+  await db.songs.update(songId, { draft: false, updatedAt: now() });
 }
 
 export async function duplicateSong(sourceId: string) {
@@ -193,16 +225,20 @@ export async function normalizeRestoredData() {
     const id = `legacy-scene-${scene.id}`; if (ideaIds.has(id)) continue;
     migratedIdeas.push({ id, songId: scene.songId, text: [scene.name, scene.action, scene.note].filter(Boolean).join("\n"), category: "映像", assetIds: scene.referenceAssetIds, legacySceneId: scene.id, createdAt: scene.createdAt, updatedAt: scene.updatedAt }); ideaIds.add(id);
   }
-  await db.transaction("rw", [db.sections, db.lyricLines, db.ideas, db.sketches, db.media, db.inbox], async () => {
+  await db.transaction("rw", [db.songs, db.sections, db.lyricLines, db.ideas, db.sketches, db.media, db.inbox], async () => {
     await db.sections.bulkPut(normalizedSections); if (migratedIdeas.length) await db.ideas.bulkAdd(migratedIdeas);
     if (migratedLines.length) await db.lyricLines.bulkAdd(migratedLines);
     if (reconciledLines.length) await db.lyricLines.bulkPut(reconciledLines);
     if (removedLineIds.length) await db.lyricLines.bulkDelete(removedLineIds);
     await db.lyricLines.toCollection().modify((line: LyricLine) => { line.alternate = line.alternate ?? ""; line.rhymes = line.rhymes ?? ""; line.ideaIds = line.ideaIds ?? []; line.note = line.note ?? ""; });
     await db.ideas.toCollection().modify((idea: Idea) => { delete idea.pinned; delete idea.sourceExcerpt; if (!Array.isArray(idea.assetIds)) idea.assetIds = []; });
-    await db.sketches.bulkPut(sketches.map((sketch) => ({ ...sketch, strokes: sketch.strokes ?? [], texts: sketch.texts ?? [], arrows: sketch.arrows ?? [], guideVisible: sketch.guideVisible ?? true, guideInExport: sketch.guideInExport ?? false, backgroundColor: sketch.backgroundColor ?? "#fffdf9", promptFields: sketch.promptFields ?? {} })));
+    await db.sketches.bulkPut(sketches.map((sketch) => ({ ...sketch, strokes: sketch.strokes ?? [], texts: sketch.texts ?? [], arrows: sketch.arrows ?? [], shapes: sketch.shapes ?? [], annotations: sketch.annotations ?? [], guideVisible: sketch.guideVisible ?? true, guideInExport: sketch.guideInExport ?? false, underlayInExport: sketch.underlayInExport ?? true, backgroundColor: sketch.backgroundColor ?? "#fffdf9", promptFields: sketch.promptFields ?? {}, draft: false })));
     await db.media.bulkPut(media.map((item) => ({ ...item, note: item.note ?? "" })));
-    await db.inbox.bulkPut(inbox.map((item) => ({ ...item, kind: "note" as const, assetIds: inboxAssetIds(item), updatedAt: item.updatedAt ?? item.createdAt })));
+    await db.inbox.bulkPut(inbox.map((item) => ({ ...item, kind: "note" as const, assetIds: inboxAssetIds(item), usedSongIds: item.usedSongIds ?? [], updatedAt: item.updatedAt ?? item.createdAt })));
+    await db.songs.toCollection().modify((song: Song) => {
+      if (!["構想中", "歌詞制作中", "仮歌確認中", "調整中", "完成", "保留"].includes(song.stage)) song.stage = "構想中";
+      song.draft = false;
+    });
   });
 }
 
@@ -216,4 +252,3 @@ export async function moveOrdered<T extends { id: string; order: number }>(table
   const reordered = [...items]; const [moved] = reordered.splice(from, 1); reordered.splice(to, 0, moved);
   const updated = reordered.map((item, order) => ({ ...item, order })); await table.bulkPut(updated); return updated;
 }
-

@@ -19,7 +19,7 @@ type Props = {
   onUpdateInbox(item: InboxItem): Promise<void>;
   onDeleteInbox(item: InboxItem): Promise<void>;
   onMoveInbox(item: InboxItem, songId: string): Promise<void>;
-  onSongFromInbox(item: InboxItem): Promise<void>;
+  onSongFromInbox(item: InboxItem, title: string): Promise<void>;
   onRefresh(): Promise<void>;
   notify(message: string): void;
 };
@@ -41,6 +41,7 @@ export function Home(props: Props) {
   const [restoreMode, setRestoreMode] = useState<"merge" | "replace">("merge");
   const [lastBackupAt, setLastBackupAt] = useState<string>();
   const [selectedSongs, setSelectedSongs] = useState<Record<string, string>>({});
+  const [newSongTitles, setNewSongTitles] = useState<Record<string, string>>({});
   const [copyRequest, setCopyRequest] = useState<{ phrases: CopyPhrase[]; initialIds: string[] }>();
   const imageInput = useRef<HTMLInputElement>(null);
   const importInput = useRef<HTMLInputElement>(null);
@@ -57,20 +58,21 @@ export function Home(props: Props) {
   }, []);
 
   const visibleSongs = useMemo(() => [...props.songs].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), [props.songs]);
-  const filteredMemos = useMemo(() => {
+  const regularMemos = useMemo(() => props.inbox.filter((item) => !item.importKey), [props.inbox]);
+  const importedMemos = useMemo(() => props.inbox.filter((item) => item.importKey), [props.inbox]);
+  const filteredImports = useMemo(() => {
     const query = memoSearch.trim().toLowerCase();
-    if (!query) return props.inbox;
-    return props.inbox.filter((item) => [item.text, item.theme, item.sourceType, ...(item.tags ?? [])].filter(Boolean).join(" ").toLowerCase().includes(query));
-  }, [props.inbox, memoSearch]);
-  const regularMemos = filteredMemos.filter((item) => !item.importKey);
+    if (!query) return importedMemos;
+    return importedMemos.filter((item) => [item.text, item.theme, item.sourceType, ...(item.tags ?? [])].filter(Boolean).join(" ").toLowerCase().includes(query));
+  }, [importedMemos, memoSearch]);
   const importGroups = useMemo(() => {
     const groups = new Map<string, InboxItem[]>();
-    for (const item of filteredMemos.filter((memo) => memo.importKey)) {
+    for (const item of filteredImports) {
       const name = item.theme || "テーマなし";
       groups.set(name, [...(groups.get(name) ?? []), item]);
     }
     return [...groups.entries()].map(([name, items]) => ({ name, items: items.sort((a, b) => (a.sourceOrder ?? 0) - (b.sourceOrder ?? 0)), order: Math.min(...items.map((item) => item.themeOrder ?? 999)) })).sort((a, b) => a.order - b.order || a.name.localeCompare(b.name, "ja"));
-  }, [filteredMemos]);
+  }, [filteredImports]);
 
   async function saveMemo() {
     if (!text.trim() && files.length === 0) return;
@@ -163,15 +165,18 @@ export function Home(props: Props) {
   }
 
   function memoCard(item: InboxItem) {
+    const selection = selectedSongs[item.id] ?? "";
+    const usedSongs = visibleSongs.filter((song) => (item.usedSongIds ?? []).includes(song.id));
     return <details className="memo-card" key={item.id}>
       <summary><span>{item.text.trim() || "添付メモ"}</span><time>{item.sourceType || formatDate(item.updatedAt ?? item.createdAt)}</time></summary>
       <textarea rows={3} aria-label="未整理メモの内容" value={item.text} onChange={(event) => void props.onUpdateInbox({ ...item, text: event.target.value, updatedAt: now() })} />
       {item.tags && item.tags.length > 0 && <div className="memo-tags">{item.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>}
       {(item.assetIds?.length || item.assetId) && <small>添付あり</small>}
+      {usedSongs.length > 0 && <p className="memo-usage">使用中：{usedSongs.map((song) => song.title).join("、")}</p>}
       <div className="memo-actions">
-        <select aria-label="移動先の曲" value={selectedSongs[item.id] ?? ""} onChange={(event) => setSelectedSongs((current) => ({ ...current, [item.id]: event.target.value }))}><option value="">既存の曲を選択</option>{visibleSongs.map((song) => <option key={song.id} value={song.id}>{song.title}</option>)}</select>
-        <button disabled={!selectedSongs[item.id]} onClick={() => void props.onMoveInbox(item, selectedSongs[item.id])}>曲へ入れる</button>
-        <button onClick={() => void props.onSongFromInbox(item)}>新しい曲にする</button>
+        <select aria-label="使用する曲" value={selection} onChange={(event) => setSelectedSongs((current) => ({ ...current, [item.id]: event.target.value }))}><option value="">曲を選択</option>{visibleSongs.map((song) => <option key={song.id} value={song.id}>{song.title}</option>)}<option value="__new__">＋ 新しい曲を作る</option></select>
+        {selection === "__new__" && <input aria-label="新しい曲名" value={newSongTitles[item.id] ?? ""} onChange={(event) => setNewSongTitles((current) => ({ ...current, [item.id]: event.target.value }))} placeholder="曲名" />}
+        <button disabled={!selection || (selection === "__new__" && !newSongTitles[item.id]?.trim())} onClick={() => selection === "__new__" ? void props.onSongFromInbox(item, newSongTitles[item.id].trim()) : void props.onMoveInbox(item, selection)}>この曲で使う</button>
         {item.text.trim() && <button onClick={() => openCopy(item.id)}>GPT用にコピー</button>}
         <button className="danger-text" onClick={() => void removeMemo(item)}>削除</button>
       </div>
@@ -197,13 +202,12 @@ export function Home(props: Props) {
       </section>
 
       <section className="memo-section">
-        <div className="section-heading"><h2>未整理メモ</h2><div className="memo-heading-actions"><span>{props.inbox.length}</span><button onClick={() => importInput.current?.click()} disabled={importing}>{importing ? "取込中" : "JSON取込"}</button><input ref={importInput} hidden type="file" accept=".json,application/json" onChange={(event) => void importJson(event.target.files?.[0])} /></div></div>
-        {(props.inbox.length > 20 || importGroups.length > 0) && <input className="memo-search" aria-label="未整理メモを検索" value={memoSearch} onChange={(event) => setMemoSearch(event.target.value)} placeholder="未整理メモを検索" />}
+        <div className="section-heading"><h2>未整理メモ</h2><span>{regularMemos.length}</span></div>
         {regularMemos.length > 0 && <div className="memo-list">{regularMemos.map(memoCard)}</div>}
-        {importGroups.length > 0 && <div className="memo-groups">{importGroups.map((group) => <details className="memo-group" key={group.name} open={Boolean(memoSearch.trim()) || openMemoGroups.includes(group.name)} onToggle={(event) => { if (memoSearch.trim()) return; const open = event.currentTarget.open; setOpenMemoGroups((current) => open ? Array.from(new Set([...current, group.name])) : current.filter((name) => name !== group.name)); }}><summary><b>{group.name}</b><span>{group.items.length}</span></summary><div className="memo-list">{group.items.map(memoCard)}</div></details>)}</div>}
-        {props.inbox.length === 0 && <p className="plain-empty">未整理メモはありません。</p>}
-        {props.inbox.length > 0 && filteredMemos.length === 0 && <p className="plain-empty">一致するメモはありません。</p>}
+        {regularMemos.length === 0 && <p className="plain-empty">未整理メモはありません。</p>}
       </section>
+
+      <section className="import-library-section"><details className="import-library"><summary><span><b>取込フレーズ</b><small>JSONから取り込んだ内容</small></span><em>{importedMemos.length}</em></summary><div className="import-library-body"><div className="memo-heading-actions"><button onClick={() => importInput.current?.click()} disabled={importing}>{importing ? "取込中" : "JSONを取り込む"}</button><input ref={importInput} hidden type="file" accept=".json,application/json" onChange={(event) => void importJson(event.target.files?.[0])} /></div>{importedMemos.length > 0 && <input className="memo-search" aria-label="取込フレーズを検索" value={memoSearch} onChange={(event) => setMemoSearch(event.target.value)} placeholder="取込フレーズを検索" />}{importGroups.length > 0 && <div className="memo-groups">{importGroups.map((group) => { const expanded = Boolean(memoSearch.trim()) || openMemoGroups.includes(group.name); return <details className="memo-group" key={group.name} open={expanded} onToggle={(event) => { if (memoSearch.trim()) return; const open = event.currentTarget.open; setOpenMemoGroups((current) => open ? Array.from(new Set([...current, group.name])) : current.filter((name) => name !== group.name)); }}><summary><b>{group.name}</b><span>{group.items.length}</span></summary>{expanded && <div className="memo-list">{group.items.map(memoCard)}</div>}</details>; })}</div>}{importedMemos.length === 0 && <p className="plain-empty">取込フレーズはありません。</p>}{importedMemos.length > 0 && filteredImports.length === 0 && <p className="plain-empty">一致するフレーズはありません。</p>}</div></details></section>
 
       <section className="library-section">
         <div className="section-heading"><h2>曲一覧</h2><button className="primary compact" onClick={props.onCreate}>＋ 新しい曲</button></div>
@@ -221,4 +225,3 @@ export function Home(props: Props) {
     </main>
   );
 }
-

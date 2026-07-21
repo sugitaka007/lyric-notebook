@@ -10,171 +10,135 @@ import { DEFAULT_SETTINGS, normalizeSettings, type AppSettings } from "./setting
 import { parseArtMemoImport } from "./artMemoImport";
 
 export type SaveState = "saved" | "saving" | "error";
-export type QueueSave = (table: Table, value: { id?: string; key?: string; songId?: string; updatedAt?: string }) => void;
+type SaveValue = { id?: string; key?: string; songId?: string; updatedAt?: string };
+export type QueueSave = (table: Table, value: SaveValue) => void;
+const songTabs: SongTab[] = ["lyrics", "ideas", "photos", "audio", "sketches"];
+
+function routeFromHash() {
+  const match = window.location.hash.match(/^#\/song\/([^/]+)\/(lyrics|ideas|photos|audio|sketches)$/);
+  return match ? { songId: decodeURIComponent(match[1]), tab: match[2] as SongTab } : undefined;
+}
+const songHash = (songId: string, tab: SongTab) => `#/song/${encodeURIComponent(songId)}/${tab}`;
 
 export default function App() {
-  const [songs, setSongs] = useState<Song[]>([]);
-  const [inbox, setInbox] = useState<InboxItem[]>([]);
-  const [activeSong, setActiveSong] = useState<Song | null>(null);
-  const [initialTab, setInitialTab] = useState<SongTab>("lyrics");
-  const [focusSongTitle, setFocusSongTitle] = useState(false);
-  const [workspace, setWorkspace] = useState<SongWorkspace>(EMPTY_WORKSPACE);
-  const [ready, setReady] = useState(false);
-  const [saveState, setSaveState] = useState<SaveState>("saved");
-  const [notice, setNotice] = useState("");
-  const [online, setOnline] = useState(navigator.onLine);
-  const [settings, setSettingsState] = useState<AppSettings>(DEFAULT_SETTINGS);
-  const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const [songs, setSongs] = useState<Song[]>([]); const [inbox, setInbox] = useState<InboxItem[]>([]);
+  const [activeSong, setActiveSong] = useState<Song | null>(null); const [initialTab, setInitialTab] = useState<SongTab>("lyrics"); const [focusSongTitle, setFocusSongTitle] = useState(false);
+  const [workspace, setWorkspace] = useState<SongWorkspace>(EMPTY_WORKSPACE); const [ready, setReady] = useState(false); const [saveState, setSaveState] = useState<SaveState>("saved");
+  const [notice, setNotice] = useState(""); const [online, setOnline] = useState(navigator.onLine); const [settings, setSettingsState] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const [updateAction, setUpdateAction] = useState<(() => void) | undefined>();
+  const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>()); const failedSaves = useRef(new Map<string, { table: Table; value: SaveValue }>());
+  const activeSongRef = useRef<Song | null>(null);
+  const focusRequestedRef = useRef(false);
 
   const refreshHome = useCallback(async () => {
     const [allSongs, allInbox] = await Promise.all([db.songs.toArray(), db.inbox.orderBy("createdAt").reverse().toArray()]);
-    setSongs(allSongs);
-    setInbox(allInbox.filter((item) => !item.deletedAt));
+    setSongs(allSongs.filter((song) => !song.draft)); setInbox(allInbox.filter((item) => !item.deletedAt));
   }, []);
 
+  const applyRoute = useCallback(async () => {
+    const route = routeFromHash();
+    const previous = activeSongRef.current;
+    if (!route) { if (previous && await isEmptyDraft(previous.id)) await deleteSongCascade(previous.id); activeSongRef.current = null; setActiveSong(null); setWorkspace(EMPTY_WORKSPACE); await refreshHome(); return; }
+    if (previous && previous.id !== route.songId && await isEmptyDraft(previous.id)) await deleteSongCascade(previous.id);
+    const song = await db.songs.get(route.songId);
+    if (!song) { history.replaceState(null, "", "#/home"); activeSongRef.current = null; setActiveSong(null); setWorkspace(EMPTY_WORKSPACE); await refreshHome(); return; }
+    activeSongRef.current = song; setFocusSongTitle(focusRequestedRef.current); focusRequestedRef.current = false; setInitialTab(route.tab); setActiveSong(song); setWorkspace(await loadWorkspace(song.id)); window.scrollTo({ top: 0 });
+  }, [refreshHome]);
+
   useEffect(() => {
-    let mounted = true;
-    const pendingTimers = timers.current;
-    Promise.all([refreshHome(), db.meta.get("settings"), db.meta.get("theme")])
-      .then(([, stored, legacyTheme]) => {
-        if (!mounted) return;
-        setSettingsState(normalizeSettings(stored?.value, legacyTheme?.value));
-        setReady(true);
-      })
-      .catch((error) => { setNotice(storageErrorMessage(error)); setReady(true); });
-    const goOnline = () => setOnline(true);
-    const goOffline = () => setOnline(false);
-    window.addEventListener("online", goOnline);
-    window.addEventListener("offline", goOffline);
+    let mounted = true; const pendingTimers = timers.current;
+    Promise.all([refreshHome(), db.meta.get("settings"), db.meta.get("theme")]).then(([, stored, legacyTheme]) => {
+      if (!mounted) return; setSettingsState(normalizeSettings(stored?.value, legacyTheme?.value));
+      if (!window.location.hash) history.replaceState(null, "", "#/home"); setReady(true);
+    }).catch((error) => { setNotice(storageErrorMessage(error)); setReady(true); });
+    const goOnline = () => setOnline(true); const goOffline = () => setOnline(false);
+    window.addEventListener("online", goOnline); window.addEventListener("offline", goOffline);
     return () => { mounted = false; window.removeEventListener("online", goOnline); window.removeEventListener("offline", goOffline); pendingTimers.forEach(clearTimeout); };
   }, [refreshHome]);
 
   useEffect(() => {
-    if (settings.theme === "system") document.documentElement.removeAttribute("data-theme");
-    else document.documentElement.dataset.theme = settings.theme;
-    document.documentElement.dataset.fontSize = settings.fontSize;
-    document.documentElement.style.setProperty("--accent", settings.accentColor);
-    document.documentElement.style.setProperty("--accent-2", settings.accentColor);
-    document.documentElement.style.setProperty("--accent-fill", settings.accentColor);
-    document.documentElement.style.setProperty("--accent-soft", `color-mix(in srgb, ${settings.accentColor} 18%, transparent)`);
-  }, [settings]);
+    if (!ready) return; void applyRoute(); const onHash = () => void applyRoute(); window.addEventListener("hashchange", onHash); return () => window.removeEventListener("hashchange", onHash);
+  }, [applyRoute, ready]);
 
-  useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(""), 5200); return () => clearTimeout(timer); }, [notice]);
-
-  const queueSave: QueueSave = useCallback((table, value) => {
-    const key = `${table.name}:${value.id ?? value.key}`;
-    setSaveState("saving");
-    const previous = timers.current.get(key);
-    if (previous) clearTimeout(previous);
-    timers.current.set(key, setTimeout(async () => {
-      try {
-        const record = "updatedAt" in value ? { ...value, updatedAt: now() } : value;
-        await table.put(record as never);
-        const songId = value.songId;
-        if (songId && table.name !== "songs") {
-          const updatedAt = now();
-          await db.songs.update(songId, { updatedAt });
-          setSongs((items) => items.map((song) => song.id === songId ? { ...song, updatedAt } : song));
-          setActiveSong((song) => song?.id === songId ? { ...song, updatedAt } : song);
-        }
-        setSaveState("saved");
-      } catch (error) { setSaveState("error"); setNotice(storageErrorMessage(error)); }
-    }, 420));
+  useEffect(() => {
+    const onUpdate = (event: Event) => { const action = (event as CustomEvent<() => Promise<void> | undefined>).detail; setUpdateAction(() => () => void action?.()); };
+    window.addEventListener("art-memo:update", onUpdate); return () => window.removeEventListener("art-memo:update", onUpdate);
   }, []);
 
-  async function openSong(song: Song, tab: SongTab = "lyrics", focusTitle = false) {
-    try { setInitialTab(tab); setFocusSongTitle(focusTitle); setActiveSong(song); setWorkspace(await loadWorkspace(song.id)); window.scrollTo({ top: 0 }); }
-    catch (error) { setNotice(storageErrorMessage(error)); }
+  useEffect(() => {
+    if (settings.theme === "system") document.documentElement.removeAttribute("data-theme"); else document.documentElement.dataset.theme = settings.theme;
+    document.documentElement.dataset.fontSize = settings.fontSize; document.documentElement.style.setProperty("--accent", settings.accentColor); document.documentElement.style.setProperty("--accent-2", settings.accentColor); document.documentElement.style.setProperty("--accent-fill", settings.accentColor); document.documentElement.style.setProperty("--accent-soft", `color-mix(in srgb, ${settings.accentColor} 18%, transparent)`);
+  }, [settings]);
+  useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(""), 5200); return () => clearTimeout(timer); }, [notice]);
+
+  const persist = useCallback(async (table: Table, value: SaveValue, key: string) => {
+    try {
+      const record = "updatedAt" in value ? { ...value, updatedAt: now() } : value; await table.put(record as never);
+      const songId = value.songId;
+      if (songId && table.name !== "songs") {
+        const updatedAt = now(); await db.songs.update(songId, { updatedAt, draft: false }); setSongs((items) => items.map((song) => song.id === songId ? { ...song, updatedAt, draft: false } : song)); setActiveSong((song) => song?.id === songId ? { ...song, updatedAt, draft: false } : song);
+      }
+      failedSaves.current.delete(key); setSaveState(failedSaves.current.size ? "error" : "saved");
+    } catch (error) { failedSaves.current.set(key, { table, value }); setSaveState("error"); setNotice(storageErrorMessage(error)); }
+  }, []);
+
+  const queueSave: QueueSave = useCallback((table, value) => {
+    const key = `${table.name}:${value.id ?? value.key}`; setSaveState("saving"); const previous = timers.current.get(key); if (previous) clearTimeout(previous);
+    timers.current.set(key, setTimeout(() => void persist(table, value, key), 420));
+  }, [persist]);
+
+  async function retrySaves() {
+    if (!failedSaves.current.size) { setSaveState("saved"); return; }
+    setSaveState("saving"); await Promise.all([...failedSaves.current.entries()].map(([key, item]) => persist(item.table, item.value, key)));
   }
 
-  async function addSong() {
-    try { const song = await createSong(); await refreshHome(); await openSong(song, "lyrics", true); }
-    catch (error) { setNotice(storageErrorMessage(error)); }
+  async function openSong(song: Song, tab?: SongTab, focusTitle = false) {
+    const stored = tab ? undefined : await db.meta.get(`lastTab:${song.id}`); const nextTab = tab ?? (songTabs.includes(stored?.value as SongTab) ? stored!.value as SongTab : "lyrics");
+    activeSongRef.current = song; focusRequestedRef.current = focusTitle; setFocusSongTitle(focusTitle); setInitialTab(nextTab); setActiveSong(song); setWorkspace(await loadWorkspace(song.id));
+    const hash = songHash(song.id, nextTab); if (window.location.hash !== hash) window.location.hash = hash; window.scrollTo({ top: 0 });
   }
 
-  async function removeSong(song: Song) {
-    try { await deleteSongCascade(song.id); if (activeSong?.id === song.id) setActiveSong(null); await refreshHome(); setNotice("曲を削除しました。"); }
-    catch (error) { setNotice(storageErrorMessage(error)); }
+  async function addSong() { try { const song = await createSong(); await openSong(song, "lyrics", true); } catch (error) { setNotice(storageErrorMessage(error)); } }
+
+  async function isEmptyDraft(songId: string) {
+    const song = await db.songs.get(songId); if (!song?.draft) return false;
+    const data = await loadWorkspace(songId); const hasLyrics = data.lines.some((line) => [line.text, line.alternate, line.rhymes, line.note].some((value) => value?.trim()));
+    const hasSketch = data.sketches.some((sketch) => !sketch.draft); return !(song.title.trim() && song.title !== "無題の曲") && !song.summary.trim() && !hasLyrics && !data.ideas.length && !data.media.length && !hasSketch;
   }
+
+  async function leaveSong() {
+    const leaving = activeSong; if (leaving && await isEmptyDraft(leaving.id)) await deleteSongCascade(leaving.id);
+    activeSongRef.current = null; setActiveSong(null); setWorkspace(EMPTY_WORKSPACE); await refreshHome(); if (window.location.hash !== "#/home") window.location.hash = "#/home";
+  }
+
+  async function removeSong(song: Song) { try { await deleteSongCascade(song.id); if (activeSong?.id === song.id) { activeSongRef.current = null; setActiveSong(null); window.location.hash = "#/home"; } await refreshHome(); setNotice("曲を削除しました。"); } catch (error) { setNotice(storageErrorMessage(error)); } }
 
   async function addInbox(text: string, files: File[]) {
     try {
-      const stamp = now();
-      const assets: MediaAsset[] = [];
-      for (const file of files) {
-        const isImage = file.type.startsWith("image/");
-        const blob = isImage ? await compressImage(file) : file;
-        assets.push({ id: uid(), kind: isImage ? "image" : "audio", origin: isImage ? undefined : file.name.startsWith("録音-") ? "recording" : "file", name: file.name, note: "", mimeType: blob.type || file.type, blob, size: blob.size, links: [], createdAt: stamp, updatedAt: stamp });
-      }
-      const item: InboxItem = { id: uid(), kind: "note", text, assetIds: assets.map((asset) => asset.id), createdAt: stamp, updatedAt: stamp };
-      await db.transaction("rw", [db.media, db.inbox], async () => { if (assets.length) await db.media.bulkAdd(assets); await db.inbox.add(item); });
-      await refreshHome(); setNotice("未整理メモに保存しました。");
+      const stamp = now(); const assets: MediaAsset[] = [];
+      for (const file of files) { const isImage = file.type.startsWith("image/"); const blob = isImage ? await compressImage(file) : file; assets.push({ id: uid(), kind: isImage ? "image" : "audio", origin: isImage ? undefined : file.name.startsWith("録音-") ? "recording" : "file", name: file.name, note: "", mimeType: blob.type || file.type, blob, size: blob.size, links: [], createdAt: stamp, updatedAt: stamp }); }
+      const item: InboxItem = { id: uid(), kind: "note", text, assetIds: assets.map((asset) => asset.id), usedSongIds: [], createdAt: stamp, updatedAt: stamp };
+      await db.transaction("rw", [db.media, db.inbox], async () => { if (assets.length) await db.media.bulkAdd(assets); await db.inbox.add(item); }); await refreshHome(); setNotice("未整理メモに保存しました。");
     } catch (error) { setNotice(storageErrorMessage(error)); }
   }
 
   async function importInboxJson(file: File) {
-    const parsed = parseArtMemoImport(await file.text(), now());
-    const existingKeys = new Set((await db.inbox.toArray()).map((item) => item.importKey).filter(Boolean));
-    const additions = parsed.items.filter((item) => !existingKeys.has(item.importKey));
-    if (additions.length) await db.inbox.bulkAdd(additions);
-    await refreshHome();
-    return { added: additions.length, skipped: parsed.items.length - additions.length, themes: parsed.themeCount };
+    const parsed = parseArtMemoImport(await file.text(), now()); const existingKeys = new Set((await db.inbox.toArray()).map((item) => item.importKey).filter(Boolean)); const additions = parsed.items.filter((item) => !existingKeys.has(item.importKey)).map((item) => ({ ...item, usedSongIds: [] }));
+    if (additions.length) await db.inbox.bulkAdd(additions); await refreshHome(); return { added: additions.length, skipped: parsed.items.length - additions.length, themes: parsed.themeCount };
   }
-
-  async function updateInbox(item: InboxItem) {
-    try { await db.inbox.put({ ...item, updatedAt: now() }); await refreshHome(); }
-    catch (error) { setNotice(storageErrorMessage(error)); }
-  }
-
-  async function deleteInbox(item: InboxItem) {
-    try {
-      const assetIds = [...(item.assetIds ?? []), ...(item.assetId ? [item.assetId] : [])];
-      await db.transaction("rw", [db.inbox, db.media], async () => { await db.inbox.delete(item.id); if (assetIds.length) await db.media.bulkDelete(assetIds); });
-      await refreshHome();
-    } catch (error) { setNotice(storageErrorMessage(error)); }
-  }
-
-  async function moveInbox(item: InboxItem, songId: string) {
-    try { await moveInboxToSong(item, songId); await refreshHome(); setNotice("曲のアイデアに移動しました。"); }
-    catch (error) { setNotice(storageErrorMessage(error)); }
-  }
-
-  async function songFromInbox(item: InboxItem) {
-    try { const song = await createSong(); await moveInboxToSong(item, song.id); await refreshHome(); await openSong(song, "ideas", true); }
-    catch (error) { setNotice(storageErrorMessage(error)); }
-  }
+  async function updateInbox(item: InboxItem) { try { await db.inbox.put({ ...item, updatedAt: now() }); await refreshHome(); } catch (error) { setNotice(storageErrorMessage(error)); } }
+  async function deleteInbox(item: InboxItem) { try { const assetIds = [...(item.assetIds ?? []), ...(item.assetId ? [item.assetId] : [])]; await db.transaction("rw", [db.inbox, db.media], async () => { await db.inbox.delete(item.id); if (assetIds.length) await db.media.bulkDelete(assetIds); }); await refreshHome(); } catch (error) { setNotice(storageErrorMessage(error)); } }
+  async function moveInbox(item: InboxItem, songId: string) { try { await moveInboxToSong(item, songId); await refreshHome(); setNotice("この曲のアイデアから参照できるようにしました。"); } catch (error) { setNotice(storageErrorMessage(error)); } }
+  async function songFromInbox(item: InboxItem, title: string) { try { const song = await createSong(title, false); await moveInboxToSong(item, song.id); await refreshHome(); await openSong({ ...song, draft: false }, "ideas"); } catch (error) { setNotice(storageErrorMessage(error)); } }
 
   function patchSong(patch: Partial<Song>) {
-    if (!activeSong) return;
-    const updated = { ...activeSong, ...patch, updatedAt: now() };
-    setActiveSong(updated);
-    setSongs((items) => items.map((song) => song.id === updated.id ? updated : song));
-    queueSave(db.songs, updated);
+    if (!activeSong) return; const meaningful = (patch.title !== undefined && patch.title.trim() !== "" && patch.title !== "無題の曲") || (patch.summary?.trim().length ?? 0) > 0;
+    const updated = { ...activeSong, ...patch, draft: meaningful ? false : activeSong.draft, updatedAt: now() }; setActiveSong(updated); setSongs((items) => items.map((song) => song.id === updated.id ? updated : song)); queueSave(db.songs, updated);
   }
-
-  async function updateSettings(patch: Partial<AppSettings>) {
-    const next = normalizeSettings({ ...settings, ...patch });
-    setSettingsState(next);
-    await db.meta.put({ key: "settings", value: next });
-  }
-
-  async function resetAllData() {
-    await db.transaction("rw", db.tables, async () => { await Promise.all(db.tables.map((table) => table.clear())); await db.meta.put({ key: "settings", value: DEFAULT_SETTINGS }); });
-    setSettingsState(DEFAULT_SETTINGS); setActiveSong(null); setWorkspace(EMPTY_WORKSPACE); await refreshHome();
-  }
+  async function updateSettings(patch: Partial<AppSettings>) { const next = normalizeSettings({ ...settings, ...patch }); setSettingsState(next); await db.meta.put({ key: "settings", value: next }); }
+  async function resetAllData() { await db.transaction("rw", db.tables, async () => { await Promise.all(db.tables.filter((table) => table.name !== "meta").map((table) => table.clear())); await db.meta.put({ key: "settings", value: DEFAULT_SETTINGS }); }); setSettingsState(DEFAULT_SETTINGS); setActiveSong(null); setWorkspace(EMPTY_WORKSPACE); window.location.hash = "#/home"; await refreshHome(); }
+  async function changeTab(tab: SongTab) { if (!activeSong) return; await db.meta.put({ key: `lastTab:${activeSong.id}`, value: tab }); const hash = songHash(activeSong.id, tab); history.replaceState(null, "", hash); setInitialTab(tab); }
 
   if (!ready) return <div className="launch-screen"><span aria-hidden="true" /><p>アートメモを起動中…</p></div>;
-
-  return (
-    <div className="app" data-online={online}>
-      {!online && <div className="offline-banner" role="status">オフライン</div>}
-      {activeSong ? (
-        <SongEditor song={activeSong} workspace={workspace} setWorkspace={setWorkspace} settings={settings} patchSong={patchSong} queueSave={queueSave} saveState={saveState} initialTab={initialTab} focusTitle={focusSongTitle} onDelete={removeSong} onBack={async () => { setActiveSong(null); await refreshHome(); }} notify={setNotice} />
-      ) : (
-        <Home songs={songs} inbox={inbox} settings={settings} onSettings={updateSettings} onResetAll={resetAllData} onOpen={openSong} onCreate={addSong} onQuickAdd={addInbox} onImportInbox={importInboxJson} onUpdateInbox={updateInbox} onDeleteInbox={deleteInbox} onMoveInbox={moveInbox} onSongFromInbox={songFromInbox} onRefresh={refreshHome} notify={setNotice} />
-      )}
-      {notice && <div className="toast" role="status">{notice}</div>}
-    </div>
-  );
+  return <div className="app" data-online={online}>{!online && <div className="offline-banner" role="status">オフライン</div>}{activeSong ? <SongEditor song={activeSong} workspace={workspace} setWorkspace={setWorkspace} settings={settings} patchSong={patchSong} queueSave={queueSave} saveState={saveState} initialTab={initialTab} focusTitle={focusSongTitle} onTabChange={(tab) => void changeTab(tab)} onRetry={() => void retrySaves()} onDelete={removeSong} onBack={() => void leaveSong()} notify={setNotice} /> : <Home songs={songs} inbox={inbox} settings={settings} onSettings={updateSettings} onResetAll={resetAllData} onOpen={openSong} onCreate={addSong} onQuickAdd={addInbox} onImportInbox={importInboxJson} onUpdateInbox={updateInbox} onDeleteInbox={deleteInbox} onMoveInbox={moveInbox} onSongFromInbox={songFromInbox} onRefresh={refreshHome} notify={setNotice} />}{updateAction && saveState === "saved" && <div className="update-banner" role="status"><span>新しいバージョンがあります</span><button onClick={updateAction}>更新する</button></div>}{notice && <div className="toast" role="status">{notice}</div>}</div>;
 }
-

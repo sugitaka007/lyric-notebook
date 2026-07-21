@@ -1,8 +1,8 @@
 import JSZip from "jszip";
 import { db, normalizeRestoredData, now, uid } from "./db";
-import type { AssociationCard, Idea, InboxItem, LyricLine, LyricSection, MediaAsset, MVScene, SketchRecord, Song } from "./types";
+import type { AssociationCard, Idea, InboxItem, LyricLine, LyricSection, LyricVersion, MediaAsset, MVScene, SketchRecord, Song } from "./types";
 
-export const BACKUP_FORMAT_VERSION = 2;
+export const BACKUP_FORMAT_VERSION = 3;
 
 interface BackupData {
   songs: Song[];
@@ -14,6 +14,8 @@ interface BackupData {
   sketches: Array<Omit<SketchRecord, "previewBlob" | "underlayBlob"> & { previewFile?: string; underlayFile?: string }>;
   media: Array<Omit<MediaAsset, "blob"> & { blobFile?: string }>;
   inbox: InboxItem[];
+  lyricVersions: LyricVersion[];
+  settings?: unknown;
 }
 
 export interface BackupManifest {
@@ -23,15 +25,16 @@ export interface BackupManifest {
   counts: Record<string, number>;
 }
 
-const DATA_KEYS = ["songs", "sections", "lyricLines", "ideas", "associations", "mvScenes", "sketches", "media", "inbox"] as const;
-const LEGACY_KEYS = DATA_KEYS.filter((key) => key !== "ideas");
+const DATA_KEYS = ["songs", "sections", "lyricLines", "ideas", "associations", "mvScenes", "sketches", "media", "inbox", "lyricVersions"] as const;
+const V2_KEYS = DATA_KEYS.filter((key) => key !== "lyricVersions");
+const LEGACY_KEYS = V2_KEYS.filter((key) => key !== "ideas");
 const safeName = (name: string) => name.replace(/[^\p{L}\p{N}._-]+/gu, "_").slice(0, 60) || "file";
 const extensionFor = (mime: string) => mime.includes("png") ? "png" : mime.includes("jpeg") ? "jpg" : mime.includes("webp") ? "webp" : mime.includes("mp4") ? "m4a" : mime.includes("webm") ? "webm" : mime.includes("ogg") ? "ogg" : "bin";
 
 export async function createBackupBlob() {
-  const [songs, sections, lyricLines, ideas, associations, mvScenes, sketchesRaw, mediaRaw, inbox] = await Promise.all([
+  const [songs, sections, lyricLines, ideas, associations, mvScenes, sketchesRaw, mediaRaw, inbox, lyricVersions, settings] = await Promise.all([
     db.songs.toArray(), db.sections.toArray(), db.lyricLines.toArray(), db.ideas.toArray(), db.associations.toArray(),
-    db.mvScenes.toArray(), db.sketches.toArray(), db.media.toArray(), db.inbox.toArray(),
+    db.mvScenes.toArray(), db.sketches.toArray(), db.media.toArray(), db.inbox.toArray(), db.lyricVersions.toArray(), db.meta.get("settings"),
   ]);
   const zip = new JSZip();
   const media: BackupData["media"] = [];
@@ -50,7 +53,7 @@ export async function createBackupBlob() {
     if (underlayBlob && underlayFile) zip.file(underlayFile, await underlayBlob.arrayBuffer());
     sketches.push({ ...record, previewFile, underlayFile });
   }
-  const data: BackupData = { songs, sections, lyricLines, ideas, associations, mvScenes, sketches, media, inbox };
+  const data: BackupData = { songs, sections, lyricLines, ideas, associations, mvScenes, sketches, media, inbox, lyricVersions, settings: settings?.value };
   const createdAt = now();
   const counts = Object.fromEntries(DATA_KEYS.map((key) => [key, data[key].length]));
   const manifest: BackupManifest = { app: "yohaku-lyric-notebook", formatVersion: BACKUP_FORMAT_VERSION, createdAt, counts };
@@ -76,13 +79,13 @@ async function parseBackup(file: Blob) {
   try { manifest = JSON.parse(await manifestFile.async("text")); raw = JSON.parse(await dataFile.async("text")); }
   catch { throw new Error("バックアップ内のJSONが壊れています。"); }
   if (manifest.app !== "yohaku-lyric-notebook") throw new Error("このアプリのバックアップではありません。");
-  if (![1, BACKUP_FORMAT_VERSION].includes(manifest.formatVersion)) throw new Error(`未対応のバックアップ形式（${manifest.formatVersion}）です。`);
-  const required = manifest.formatVersion === 1 ? LEGACY_KEYS : DATA_KEYS;
+  if (![1, 2, BACKUP_FORMAT_VERSION].includes(manifest.formatVersion)) throw new Error(`未対応のバックアップ形式（${manifest.formatVersion}）です。`);
+  const required = manifest.formatVersion === 1 ? LEGACY_KEYS : manifest.formatVersion === 2 ? V2_KEYS : DATA_KEYS;
   for (const key of required) {
     assertArray(raw[key], key);
     if (raw[key]!.length !== manifest.counts[key]) throw new Error(`${key} の件数がmanifestと一致しません。`);
   }
-  const normalized = { ...raw, ideas: raw.ideas ?? [] } as BackupData;
+  const normalized = { ...raw, ideas: raw.ideas ?? [], lyricVersions: raw.lyricVersions ?? [] } as BackupData;
   const media: MediaAsset[] = [];
   for (const item of normalized.media) {
     let blob: Blob | undefined;
@@ -117,12 +120,14 @@ function remapForMerge(data: Awaited<ReturnType<typeof parseBackup>>["data"]) {
     songs: data.songs.map((x) => ({ ...x, id: songId(x.id), title: `${x.title}（復元）` })),
     sections: data.sections.map((x) => ({ ...x, id: maps.section.get(x.id)!, songId: songId(x.songId) })),
     lyricLines: data.lyricLines.map((x) => ({ ...x, id: maps.lyric.get(x.id)!, songId: songId(x.songId), sectionId: maps.section.get(x.sectionId) ?? x.sectionId, ideaIds: (x.ideaIds ?? []).map((id) => maps.idea.get(id) ?? id) })),
-    ideas: data.ideas.map((x) => ({ ...x, id: maps.idea.get(x.id)!, songId: songId(x.songId), assetIds: (x.assetIds ?? []).map((id) => maps.media.get(id) ?? id) })),
+    ideas: data.ideas.map((x) => ({ ...x, id: maps.idea.get(x.id)!, songId: songId(x.songId), sourceInboxId: x.sourceInboxId ? maps.inbox.get(x.sourceInboxId) ?? x.sourceInboxId : undefined, assetIds: (x.assetIds ?? []).map((id) => maps.media.get(id) ?? id) })),
     associations: data.associations.map((x) => ({ ...x, id: maps.association.get(x.id)!, songId: songId(x.songId), relatedLyricId: x.relatedLyricId ? maps.lyric.get(x.relatedLyricId) : undefined, imageAssetId: x.imageAssetId ? maps.media.get(x.imageAssetId) : undefined })),
     mvScenes: data.mvScenes.map((x) => ({ ...x, id: maps.scene.get(x.id)!, songId: songId(x.songId), relatedLyricIds: x.relatedLyricIds.map((id) => maps.lyric.get(id) ?? id), referenceAssetIds: x.referenceAssetIds.map((id) => maps.media.get(id) ?? id) })),
     sketches: data.sketches.map((x) => ({ ...x, id: maps.sketch.get(x.id)!, songId: songId(x.songId), relatedLyricId: x.relatedLyricId ? maps.lyric.get(x.relatedLyricId) : undefined, relatedSceneId: x.relatedSceneId ? maps.scene.get(x.relatedSceneId) : undefined })),
     media: data.media.map((x) => ({ ...x, id: maps.media.get(x.id)!, songId: x.songId ? songId(x.songId) : undefined, links: (x.links ?? []).map((link) => ({ ...link, id: link.type === "lyric" ? maps.lyric.get(link.id) ?? link.id : link.type === "association" ? maps.association.get(link.id) ?? link.id : maps.scene.get(link.id) ?? link.id })) })),
-    inbox: data.inbox.map((x) => ({ ...x, id: maps.inbox.get(x.id)!, assetId: x.assetId ? maps.media.get(x.assetId) : undefined, assetIds: (x.assetIds ?? []).map((id) => maps.media.get(id) ?? id) })),
+    inbox: data.inbox.map((x) => ({ ...x, id: maps.inbox.get(x.id)!, assetId: x.assetId ? maps.media.get(x.assetId) : undefined, assetIds: (x.assetIds ?? []).map((id) => maps.media.get(id) ?? id), usedSongIds: (x.usedSongIds ?? []).map(songId) })),
+    lyricVersions: data.lyricVersions.map((x) => ({ ...x, id: uid(), songId: songId(x.songId), sections: x.sections.map((section) => ({ ...section, lines: section.lines.map((line) => ({ ...line, ideaIds: line.ideaIds.map((id) => maps.idea.get(id) ?? id) })) })) })),
+    settings: data.settings,
   };
 }
 
@@ -136,10 +141,11 @@ export async function restoreBackup(file: Blob, mode: "merge" | "replace") {
     if (mode === "replace") await Promise.all(db.tables.map((table) => table.clear()));
     await db.songs.bulkPut(data.songs); await db.sections.bulkPut(data.sections); await db.lyricLines.bulkPut(data.lyricLines); await db.ideas.bulkPut(data.ideas);
     await db.associations.bulkPut(data.associations); await db.mvScenes.bulkPut(data.mvScenes); await db.sketches.bulkPut(data.sketches); await db.media.bulkPut(data.media); await db.inbox.bulkPut(data.inbox);
-    if (currentSettings) await db.meta.put(currentSettings);
+    await db.lyricVersions.bulkPut(data.lyricVersions);
+    if (data.settings !== undefined) await db.meta.put({ key: "settings", value: data.settings });
+    else if (currentSettings) await db.meta.put(currentSettings);
     await db.meta.put({ key: "lastRestoreAt", value: now() });
   });
   await normalizeRestoredData();
   return parsed.manifest;
 }
-

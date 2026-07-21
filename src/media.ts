@@ -18,6 +18,20 @@ export function formatBytes(bytes: number) {
   return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
 }
 
+export async function getAudioDuration(blob: Blob): Promise<number | undefined> {
+  if (typeof Audio === "undefined") return undefined;
+  const url = URL.createObjectURL(blob);
+  try {
+    const audio = new Audio(); audio.preload = "metadata"; audio.src = url;
+    return await new Promise<number | undefined>((resolve) => {
+      const done = (value?: number) => { audio.removeAttribute("src"); resolve(value && Number.isFinite(value) ? Math.round(value) : undefined); };
+      audio.onloadedmetadata = () => done(audio.duration);
+      audio.onerror = () => done();
+      setTimeout(() => done(), 6000);
+    });
+  } finally { URL.revokeObjectURL(url); }
+}
+
 export function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob); const anchor = document.createElement("a"); anchor.href = url; anchor.download = filename; anchor.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);

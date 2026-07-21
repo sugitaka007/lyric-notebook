@@ -22,16 +22,18 @@ describe("曲・メモ・素材", () => {
     expect(await db.sections.count()).toBe(0);
   });
 
-  it("未整理メモの文章と添付を曲のアイデアへ移動できる", async () => {
-    const song = await createSong(); const stamp = now(); const assetId = uid();
+  it("元の未整理メモを残したまま同じ内容を複数の曲で参照できる", async () => {
+    const song = await createSong(); const another = await createSong("別の曲"); const stamp = now(); const assetId = uid();
     await db.media.add({ id: assetId, kind: "audio", name: "録音.m4a", note: "", mimeType: "audio/mp4", blob: new Blob(["audio"]), size: 5, links: [], createdAt: stamp, updatedAt: stamp });
     const memo: InboxItem = { id: uid(), kind: "note", text: "曖昧な思いつき", assetIds: [assetId], createdAt: stamp, updatedAt: stamp };
-    await db.inbox.add(memo); await moveInboxToSong(memo, song.id);
+    await db.inbox.add(memo); await moveInboxToSong(memo, song.id); await moveInboxToSong({ ...memo, usedSongIds: [song.id] }, another.id);
     const idea = await db.ideas.where("songId").equals(song.id).first();
     expect(idea?.text).toBe("曖昧な思いつき");
     expect(idea?.assetIds).toEqual([assetId]);
-    expect((await db.media.get(assetId))?.songId).toBe(song.id);
-    expect(await db.inbox.count()).toBe(0);
+    expect(idea?.sourceInboxId).toBe(memo.id);
+    expect((await db.media.get(assetId))?.songId).toBeUndefined();
+    expect(await db.ideas.where("sourceInboxId").equals(memo.id).count()).toBe(2);
+    expect((await db.inbox.get(memo.id))?.usedSongIds).toEqual([song.id, another.id]);
   });
 
   it("MV場面を並べ替えられる", async () => {
@@ -70,19 +72,19 @@ describe("データベース更新", () => {
     await migrated.delete();
   });
 
-  it("v3からv4への更新では本文とスケッチを残し、不要なアイデア情報だけ除く", async () => {
+  it("v3の保存データは今回のv6再構成で一度だけ消去する", async () => {
     const name = `preserve-${uid()}`; const legacy = new Dexie(name); legacy.version(3).stores(STORES_V3); const stamp = now();
     const song = { id: uid(), title: "保持する曲", stage: "種", tags: [], archived: false, createdAt: stamp, updatedAt: stamp } as unknown as Song;
     await legacy.table("songs").add(song);
     await legacy.table("ideas").add({ id: "idea", songId: song.id, text: "残す本文", pinned: true, sourceExcerpt: "旧関連", assetIds: [], createdAt: stamp, updatedAt: stamp });
     await legacy.table("sketches").add({ id: "sketch", songId: song.id, name: "構図", aspect: "16:9", strokes: [], createdAt: stamp, updatedAt: stamp }); legacy.close();
     const migrated = new LyricDatabase(name); await migrated.open();
-    expect(await migrated.songs.count()).toBe(1); const idea = await migrated.ideas.get("idea"); expect(idea?.text).toBe("残す本文"); expect(idea?.pinned).toBeUndefined(); expect(idea?.sourceExcerpt).toBeUndefined();
-    const sketch = await migrated.sketches.get("sketch"); expect(sketch?.texts).toEqual([]); expect(sketch?.arrows).toEqual([]); expect(sketch?.guideVisible).toBe(true);
+    expect(await migrated.songs.count()).toBe(0); expect(await migrated.ideas.count()).toBe(0); expect(await migrated.sketches.count()).toBe(0); expect((await migrated.meta.get("v6ResetComplete"))?.value).toBeTruthy();
+    await migrated.inbox.add({ id: "after", kind: "note", text: "更新後", createdAt: stamp, updatedAt: stamp }); migrated.close(); await migrated.open(); expect(await migrated.inbox.count()).toBe(1);
     await migrated.delete();
   });
 
-  it("v4からv5への更新でセクション本文を固有ID付きの歌詞行へ移行する", async () => {
+  it("v4の保存データもv6再構成後は再初期化されない", async () => {
     const name = `lines-${uid()}`; const legacy = new Dexie(name); legacy.version(4).stores(STORES_V4); const stamp = now();
     const song = { id: uid(), title: "移行する曲", stage: "制作中", tags: [], archived: false, createdAt: stamp, updatedAt: stamp } as unknown as Song;
     await legacy.table("songs").add(song);
@@ -91,15 +93,8 @@ describe("データベース更新", () => {
     await legacy.table("inbox").add({ id: "memo", kind: "note", text: "残すメモ", createdAt: stamp, updatedAt: stamp });
     legacy.close();
     const migrated = new LyricDatabase(name); await migrated.open();
-    const lines = await migrated.lyricLines.where("sectionId").equals("section").sortBy("order");
-    expect(lines.map((line) => line.text)).toEqual(["一行目", "二行目"]);
-    expect(lines[0].id).toBe("existing-line");
-    expect(lines[0].alternate).toBe("別案");
-    expect(lines.every((line) => Boolean(line.id) && line.rhymes === "" && Array.isArray(line.ideaIds))).toBe(true);
-    expect((await migrated.inbox.get("memo"))?.text).toBe("残すメモ");
-    migrated.close(); await migrated.open();
-    expect(await migrated.lyricLines.where("sectionId").equals("section").count()).toBe(2);
+    expect(await migrated.lyricLines.count()).toBe(0); expect(await migrated.inbox.count()).toBe(0);
+    await migrated.inbox.add({ id: "new-memo", kind: "note", text: "再取込できる", createdAt: stamp, updatedAt: stamp }); migrated.close(); await migrated.open(); expect((await migrated.inbox.get("new-memo"))?.text).toBe("再取込できる");
     await migrated.delete();
   });
 });
-
