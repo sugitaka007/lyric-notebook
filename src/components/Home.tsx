@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createBackupBlob, inspectBackup, restoreBackup } from "../backup";
-import { db, now } from "../db";
+import { db } from "../db";
 import { downloadBlob } from "../media";
 import type { InboxItem, Song } from "../types";
 import { GPT_REQUEST_OPTIONS, type AppSettings, type GptRequestId } from "../settings";
@@ -14,7 +14,7 @@ type Props = {
   onResetAll(): Promise<void>;
   onOpen(song: Song): void;
   onCreate(): void;
-  onQuickAdd(text: string, files: File[]): Promise<void>;
+  onQuickAdd(text: string, files: File[], kind: InboxItem["kind"]): Promise<void>;
   onImportInbox(file: File): Promise<{ added: number; skipped: number; themes: number }>;
   onUpdateInbox(item: InboxItem): Promise<void>;
   onDeleteInbox(item: InboxItem): Promise<void>;
@@ -32,8 +32,75 @@ const formatBytes = (bytes: number) => {
   return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
 };
 
+const MEMO_KIND_LABELS: Record<InboxItem["kind"], string> = { note: "未分類", lyric: "作詞", mv: "MV案", audio: "音・メロディ", image: "画像" };
+
+function MemoCard({ item, songs, selection, newSongTitle, onSelection, onNewSongTitle, onUpdate, onMove, onNewSong, onCopy, onRemove }: {
+  item: InboxItem; songs: Song[]; selection: string; newSongTitle: string;
+  onSelection(value: string): void; onNewSongTitle(value: string): void;
+  onUpdate(item: InboxItem): Promise<void>; onMove(item: InboxItem, songId: string): Promise<void>;
+  onNewSong(item: InboxItem, title: string): Promise<void>; onCopy(item: InboxItem): void; onRemove(item: InboxItem): Promise<void>;
+}) {
+  const [draft, setDraft] = useState(item.text);
+  const latestItem = useRef(item); const draftRef = useRef(item.text); const dirty = useRef(false);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const saveChain = useRef<Promise<void>>(Promise.resolve()); const updateRef = useRef(onUpdate);
+
+  useEffect(() => {
+    latestItem.current = item; updateRef.current = onUpdate;
+    if (!dirty.current) { draftRef.current = item.text; setDraft(item.text); }
+  }, [item, onUpdate]);
+
+  useEffect(() => () => {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    if (dirty.current) void updateRef.current({ ...latestItem.current, text: draftRef.current }).catch(() => undefined);
+  }, []);
+
+  function persist(value: string, patch: Partial<InboxItem> = {}) {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    const updated = { ...latestItem.current, ...patch, text: value };
+    const task = saveChain.current.catch(() => undefined).then(() => updateRef.current(updated));
+    saveChain.current = task;
+    return task.then(() => { latestItem.current = updated; if (draftRef.current === value) dirty.current = false; }).catch((error) => { dirty.current = true; throw error; });
+  }
+
+  function edit(value: string) {
+    draftRef.current = value; dirty.current = true; setDraft(value);
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => { saveTimer.current = undefined; void persist(value).catch(() => undefined); }, 500);
+  }
+
+  async function flush() {
+    if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = undefined; }
+    if (dirty.current) await persist(draftRef.current);
+    else await saveChain.current.catch(() => undefined);
+    return { ...latestItem.current, text: draftRef.current };
+  }
+
+  async function changeKind(kind: InboxItem["kind"]) { try { await persist(draftRef.current, { kind }); } catch { /* 通知は親画面で表示 */ } }
+  async function move() { try { const current = await flush(); if (selection === "__new__") await onNewSong(current, newSongTitle.trim()); else await onMove(current, selection); } catch { /* 保存失敗時は未整理メモに残す */ } }
+  async function remove() { if (saveTimer.current) clearTimeout(saveTimer.current); dirty.current = false; await saveChain.current.catch(() => undefined); await onRemove({ ...latestItem.current, text: draftRef.current }); }
+  const usedSongs = songs.filter((song) => (item.usedSongIds ?? []).includes(song.id));
+
+  return <details className="memo-card">
+    <summary><span>{draft.trim() || "添付メモ"}</span><span className="memo-summary-meta"><i>{item.sourceType || MEMO_KIND_LABELS[item.kind]}</i><time>{formatDate(item.updatedAt ?? item.createdAt)}</time></span></summary>
+    <textarea rows={3} aria-label="未整理メモの内容" value={draft} onChange={(event) => edit(event.target.value)} onBlur={() => void flush().catch(() => undefined)} />
+    {item.tags && item.tags.length > 0 && <div className="memo-tags">{item.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>}
+    {(item.assetIds?.length || item.assetId) && <small>添付あり</small>}
+    {usedSongs.length > 0 && <p className="memo-usage">使用中：{usedSongs.map((song) => song.title).join("、")}</p>}
+    <div className="memo-actions">
+      {!item.importKey && <select aria-label="メモの分類" value={item.kind} onChange={(event) => void changeKind(event.target.value as InboxItem["kind"])}><option value="note">未分類</option><option value="lyric">作詞</option><option value="mv">MV案</option><option value="audio">音・メロディ</option></select>}
+      <select aria-label="移動先の曲" value={selection} onChange={(event) => onSelection(event.target.value)}><option value="">曲を選択</option>{songs.map((song) => <option key={song.id} value={song.id}>{song.title}</option>)}<option value="__new__">＋ 新しい曲を作る</option></select>
+      {selection === "__new__" && <input aria-label="新しい曲名" value={newSongTitle} onChange={(event) => onNewSongTitle(event.target.value)} placeholder="曲名" />}
+      <button disabled={!selection || (selection === "__new__" && !newSongTitle.trim())} onClick={() => void move()}>曲へ移動</button>
+      {draft.trim() && <button onClick={() => onCopy({ ...latestItem.current, text: draftRef.current })}>GPT用にコピー</button>}
+      <button className="danger-text" onClick={() => void remove()}>削除</button>
+    </div>
+  </details>;
+}
+
 export function Home(props: Props) {
   const [text, setText] = useState("");
+  const [quickKind, setQuickKind] = useState<InboxItem["kind"]>("note");
   const [files, setFiles] = useState<File[]>([]);
   const [saving, setSaving] = useState(false);
   const [recording, setRecording] = useState(false);
@@ -94,7 +161,7 @@ export function Home(props: Props) {
   async function saveMemo() {
     if (!text.trim() && files.length === 0) return;
     setSaving(true);
-    try { await props.onQuickAdd(text, files); setText(""); setFiles([]); }
+    try { await props.onQuickAdd(text, files, quickKind); setText(""); setFiles([]); }
     finally { setSaving(false); }
   }
 
@@ -184,21 +251,7 @@ export function Home(props: Props) {
 
   function memoCard(item: InboxItem) {
     const selection = selectedSongs[item.id] ?? "";
-    const usedSongs = visibleSongs.filter((song) => (item.usedSongIds ?? []).includes(song.id));
-    return <details className="memo-card" key={item.id}>
-      <summary><span>{item.text.trim() || "添付メモ"}</span><time>{item.sourceType || formatDate(item.updatedAt ?? item.createdAt)}</time></summary>
-      <textarea rows={3} aria-label="未整理メモの内容" value={item.text} onChange={(event) => void props.onUpdateInbox({ ...item, text: event.target.value, updatedAt: now() })} />
-      {item.tags && item.tags.length > 0 && <div className="memo-tags">{item.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>}
-      {(item.assetIds?.length || item.assetId) && <small>添付あり</small>}
-      {usedSongs.length > 0 && <p className="memo-usage">使用中：{usedSongs.map((song) => song.title).join("、")}</p>}
-      <div className="memo-actions">
-        <select aria-label="使用する曲" value={selection} onChange={(event) => setSelectedSongs((current) => ({ ...current, [item.id]: event.target.value }))}><option value="">曲を選択</option>{visibleSongs.map((song) => <option key={song.id} value={song.id}>{song.title}</option>)}<option value="__new__">＋ 新しい曲を作る</option></select>
-        {selection === "__new__" && <input aria-label="新しい曲名" value={newSongTitles[item.id] ?? ""} onChange={(event) => setNewSongTitles((current) => ({ ...current, [item.id]: event.target.value }))} placeholder="曲名" />}
-        <button disabled={!selection || (selection === "__new__" && !newSongTitles[item.id]?.trim())} onClick={() => selection === "__new__" ? void props.onSongFromInbox(item, newSongTitles[item.id].trim()) : void props.onMoveInbox(item, selection)}>この曲で使う</button>
-        {item.text.trim() && <button onClick={() => openCopy(item.id)}>GPT用にコピー</button>}
-        <button className="danger-text" onClick={() => void removeMemo(item)}>削除</button>
-      </div>
-    </details>;
+    return <MemoCard key={item.id} item={item} songs={visibleSongs} selection={selection} newSongTitle={newSongTitles[item.id] ?? ""} onSelection={(value) => setSelectedSongs((current) => ({ ...current, [item.id]: value }))} onNewSongTitle={(value) => setNewSongTitles((current) => ({ ...current, [item.id]: value }))} onUpdate={props.onUpdateInbox} onMove={props.onMoveInbox} onNewSong={props.onSongFromInbox} onCopy={(current) => openCopy(current.id, { id: current.id, text: current.text })} onRemove={removeMemo} />;
   }
 
   return (
@@ -209,6 +262,7 @@ export function Home(props: Props) {
       <section className="quick-composer">
         <h2>クイック追加</h2>
         <textarea aria-label="クイック追加のメモ" value={text} onChange={(event) => setText(event.target.value)} placeholder="" rows={2} />
+        <label className="quick-kind"><span>分類</span><select aria-label="クイック追加の分類" value={quickKind} onChange={(event) => setQuickKind(event.target.value as InboxItem["kind"])}><option value="note">未分類</option><option value="lyric">作詞</option><option value="mv">MV案</option><option value="audio">音・メロディ</option></select></label>
         {files.length > 0 && <ul className="attachment-list">{files.map((file, index) => <li key={`${file.name}-${index}`}><span>{file.name}</span><button onClick={() => setFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))} aria-label={`${file.name}を外す`}>×</button></li>)}</ul>}
         <div className="quick-actions">
           <button className={recording ? "recording" : ""} onClick={recording ? stopRecording : startRecording}>{recording ? `録音停止 ${recordSeconds}秒` : "音声録音"}</button>

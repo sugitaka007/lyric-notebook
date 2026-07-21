@@ -113,11 +113,11 @@ export default function App() {
 
   async function removeSong(song: Song) { try { await deleteSongCascade(song.id); if (activeSong?.id === song.id) { activeSongRef.current = null; setActiveSong(null); window.location.hash = "#/home"; } await refreshHome(); setNotice("曲を削除しました。"); } catch (error) { setNotice(storageErrorMessage(error)); } }
 
-  async function addInbox(text: string, files: File[]) {
+  async function addInbox(text: string, files: File[], kind: InboxItem["kind"]) {
     try {
       const stamp = now(); const assets: MediaAsset[] = [];
       for (const file of files) { const isImage = file.type.startsWith("image/"); const blob = isImage ? await compressImage(file) : file; assets.push({ id: uid(), kind: isImage ? "image" : "audio", origin: isImage ? undefined : file.name.startsWith("録音-") ? "recording" : "file", name: file.name, note: "", mimeType: blob.type || file.type, blob, size: blob.size, links: [], createdAt: stamp, updatedAt: stamp }); }
-      const item: InboxItem = { id: uid(), kind: "note", text, assetIds: assets.map((asset) => asset.id), usedSongIds: [], createdAt: stamp, updatedAt: stamp };
+      const item: InboxItem = { id: uid(), kind, text, assetIds: assets.map((asset) => asset.id), usedSongIds: [], createdAt: stamp, updatedAt: stamp };
       await db.transaction("rw", [db.media, db.inbox], async () => { if (assets.length) await db.media.bulkAdd(assets); await db.inbox.add(item); }); await refreshHome(); setNotice("未整理メモに保存しました。");
     } catch (error) { setNotice(storageErrorMessage(error)); }
   }
@@ -126,9 +126,14 @@ export default function App() {
     const parsed = parseArtMemoImport(await file.text(), now()); const existingKeys = new Set((await db.inbox.toArray()).map((item) => item.importKey).filter(Boolean)); const additions = parsed.items.filter((item) => !existingKeys.has(item.importKey)).map((item) => ({ ...item, usedSongIds: [] }));
     if (additions.length) await db.inbox.bulkAdd(additions); await refreshHome(); return { added: additions.length, skipped: parsed.items.length - additions.length, themes: parsed.themeCount };
   }
-  async function updateInbox(item: InboxItem) { try { await db.inbox.put({ ...item, updatedAt: now() }); await refreshHome(); } catch (error) { setNotice(storageErrorMessage(error)); } }
+  async function updateInbox(item: InboxItem) {
+    const updated = { ...item, updatedAt: now() };
+    setInbox((items) => items.map((current) => current.id === updated.id ? updated : current));
+    try { await db.inbox.put(updated); }
+    catch (error) { await refreshHome(); setNotice(storageErrorMessage(error)); throw error; }
+  }
   async function deleteInbox(item: InboxItem) { try { const assetIds = [...(item.assetIds ?? []), ...(item.assetId ? [item.assetId] : [])]; await db.transaction("rw", [db.inbox, db.media], async () => { await db.inbox.delete(item.id); if (assetIds.length) await db.media.bulkDelete(assetIds); }); await refreshHome(); } catch (error) { setNotice(storageErrorMessage(error)); } }
-  async function moveInbox(item: InboxItem, songId: string) { try { await moveInboxToSong(item, songId); await refreshHome(); setNotice("この曲のアイデアから参照できるようにしました。"); } catch (error) { setNotice(storageErrorMessage(error)); } }
+  async function moveInbox(item: InboxItem, songId: string) { try { await moveInboxToSong(item, songId); await refreshHome(); setNotice("未整理メモから曲へ移動しました。"); } catch (error) { setNotice(storageErrorMessage(error)); } }
   async function songFromInbox(item: InboxItem, title: string) { try { const song = await createSong(title, false); await moveInboxToSong(item, song.id); await refreshHome(); await openSong({ ...song, draft: false }, "ideas"); } catch (error) { setNotice(storageErrorMessage(error)); } }
 
   function patchSong(patch: Partial<Song>) {

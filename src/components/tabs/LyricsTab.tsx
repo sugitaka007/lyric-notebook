@@ -1,18 +1,20 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { db, moveOrdered, now, uid } from "../../db";
 import type { LyricLine, LyricSection } from "../../types";
 import type { TabProps } from "../SongEditor";
 
 const sectionPresets = ["イントロ", "Aメロ", "Bメロ", "サビ", "2番", "ブリッジ", "アウトロ", "自由セクション"];
+const listEntries = (value = "") => value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
 
 const newLine = (songId: string, sectionId: string, order: number): LyricLine => {
   const stamp = now();
   return { id: uid(), songId, sectionId, text: "", status: "仮採用", alternate: "", rhymes: "", ideaIds: [], note: "", order, createdAt: stamp, updatedAt: stamp };
 };
 
-export function LyricsTab({ song, workspace, setWorkspace, queueSave, notify }: TabProps) {
+export function LyricsTab({ song, workspace, setWorkspace, queueSave }: TabProps) {
   const [focusLineId, setFocusLineId] = useState<string>();
-  const adjustmentCursor = useRef(-1);
+  const [candidateDrafts, setCandidateDrafts] = useState<Record<string, string>>({});
+  const [rhymeDrafts, setRhymeDrafts] = useState<Record<string, string>>({});
   const sortedSections = [...workspace.sections].sort((a, b) => a.order - b.order);
   const sectionLines = (sectionId: string) => workspace.lines.filter((line) => line.sectionId === sectionId).sort((a, b) => a.order - b.order);
 
@@ -92,29 +94,40 @@ export function LyricsTab({ song, workspace, setWorkspace, queueSave, notify }: 
     setWorkspace((data) => ({ ...data, sections: remaining, lines: data.lines.filter((line) => line.sectionId !== section.id) }));
   }
 
-  function focusNextAdjustment() {
-    const lines = workspace.lines.filter((line) => line.status === "要修正").sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
-    if (!lines.length) { notify("要調整の行はありません。"); return; }
-    adjustmentCursor.current = (adjustmentCursor.current + 1) % lines.length; setFocusLineId(lines[adjustmentCursor.current].id);
+  function addCandidates(line: LyricLine) {
+    const additions = listEntries(candidateDrafts[line.id]); if (!additions.length) return;
+    const next = Array.from(new Set([...listEntries(line.alternate), ...additions]));
+    patchLine(line, { alternate: next.join("\n") }); setCandidateDrafts((items) => ({ ...items, [line.id]: "" }));
+  }
+
+  function adoptCandidate(line: LyricLine, candidate: string) {
+    const current = line.text.trim(); const remaining = listEntries(line.alternate).filter((item) => item !== candidate);
+    if (current && current !== candidate && !remaining.includes(current)) remaining.push(current);
+    patchLine(line, { text: candidate, alternate: remaining.join("\n") });
+  }
+
+  function removeCandidate(line: LyricLine, candidate: string) { patchLine(line, { alternate: listEntries(line.alternate).filter((item) => item !== candidate).join("\n") }); }
+
+  function addRhymes(line: LyricLine) {
+    const additions = (rhymeDrafts[line.id] ?? "").split(/[\r\n、,]+/).map((item) => item.trim()).filter(Boolean); if (!additions.length) return;
+    const next = Array.from(new Set([...listEntries(line.rhymes), ...additions]));
+    patchLine(line, { rhymes: next.join("\n") }); setRhymeDrafts((items) => ({ ...items, [line.id]: "" }));
   }
 
   return (
     <section className="tab-page lyrics-page"><div className="tab-heading"><h1>歌詞</h1><div className="lyrics-heading-actions"><select aria-label="セクションを追加" value="" onChange={(event) => { void addSection(event.target.value); event.target.value = ""; }}><option value="">＋ セクション</option>{sectionPresets.map((name) => <option key={name}>{name}</option>)}</select></div></div>
-      {workspace.lines.some((line) => line.status === "要修正") && <button className="next-adjustment" onClick={focusNextAdjustment}>次の要調整行へ</button>}
       {sortedSections.map((section, sectionIndex) => {
         const lines = sectionLines(section.id);
         return <article className="lyric-section simple-section" key={section.id}>
           <header><input aria-label="セクション名" value={section.name} onChange={(event) => patchSection(section, { name: event.target.value })} /><details className="section-menu"><summary aria-label="セクション操作">•••</summary><div><button disabled={sectionIndex === 0} onClick={() => void moveSection(sectionIndex, -1)}>上へ</button><button disabled={sectionIndex === sortedSections.length - 1} onClick={() => void moveSection(sectionIndex, 1)}>下へ</button><button className="danger-text" onClick={() => void deleteSection(section)}>削除</button></div></details></header>
           <div className="lyric-line-list">{lines.map((line, lineIndex) => {
-            const rhymeWords = (line.rhymes ?? "").split(/\r?\n/).map((word) => word.trim()).filter(Boolean);
-            return <div className={`lyric-line-editor ${line.status === "要修正" ? "needs-adjustment" : ""}`} key={line.id}>
+            const candidates = listEntries(line.alternate); const rhymeWords = listEntries(line.rhymes);
+            return <div className="lyric-line-editor" key={line.id}>
               <span className="lyric-line-number">{lineIndex + 1}</span>
               <input id={`line-${line.id}`} className="lyric-line-input" aria-label={`${section.name} ${lineIndex + 1}行目`} value={line.text} onChange={(event) => patchLine(line, { text: event.target.value })} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void addLyricLine(section, lineIndex + 1); } }} />
-              {line.status === "要修正" && <span className="adjustment-label">要調整</span>}
-              <div className="lyric-detail-buttons">
-                <details className="lyric-detail-panel"><summary><span>別案</span><small>{line.alternate.trim() ? "入力済み" : "タップして入力"}</small></summary><div><label>別案<textarea rows={2} value={line.alternate} onChange={(event) => patchLine(line, { alternate: event.target.value })} /></label></div></details>
-                <details className="lyric-detail-panel"><summary><span>韻</span><small>{rhymeWords.length ? `${rhymeWords.length}語` : "タップして入力"}</small></summary><div><label><span>韻</span><small>1行に1語</small><textarea rows={3} value={line.rhymes ?? ""} onChange={(event) => patchLine(line, { rhymes: event.target.value })} /></label>{rhymeWords.length > 0 && <div className="rhyme-words">{rhymeWords.map((word, index) => <span key={`${word}-${index}`}>{word}</span>)}</div>}</div></details>
-                <details className="lyric-detail-panel"><summary><span>状態・メモ</span><small>{line.status === "要修正" || line.note.trim() ? "入力済み" : "タップして入力"}</small></summary><div><label className="switch-row"><span>要調整</span><input type="checkbox" checked={line.status === "要修正"} onChange={(event) => patchLine(line, { status: event.target.checked ? "要修正" : "仮採用" })} /></label><label>メモ<textarea rows={2} value={line.note} onChange={(event) => patchLine(line, { note: event.target.value })} /></label></div></details>
+              <div className="lyric-explore-panels">
+                <details className="lyric-explore-panel"><summary><span>言い換え候補</span><em>{candidates.length}</em></summary><div><div className="lyric-entry-adder"><input aria-label="言い換え候補を追加" value={candidateDrafts[line.id] ?? ""} onChange={(event) => setCandidateDrafts((items) => ({ ...items, [line.id]: event.target.value }))} onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); addCandidates(line); } }} placeholder="候補を入力" /><button disabled={!candidateDrafts[line.id]?.trim()} onClick={() => addCandidates(line)}>追加</button></div>{candidates.length > 0 ? <div className="lyric-candidate-list">{candidates.map((candidate, index) => <div key={`${candidate}-${index}`}><span>{candidate}</span><button onClick={() => adoptCandidate(line, candidate)}>採用</button><button aria-label={`${candidate}を削除`} onClick={() => removeCandidate(line, candidate)}>×</button></div>)}</div> : <small>候補はまだありません。</small>}</div></details>
+                <details className="lyric-explore-panel"><summary><span>韻</span><em>{rhymeWords.length}</em></summary><div><div className="lyric-entry-adder"><input aria-label="韻を追加" value={rhymeDrafts[line.id] ?? ""} onChange={(event) => setRhymeDrafts((items) => ({ ...items, [line.id]: event.target.value }))} onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); addRhymes(line); } }} placeholder="1語入力" /><button disabled={!rhymeDrafts[line.id]?.trim()} onClick={() => addRhymes(line)}>追加</button></div>{rhymeWords.length > 0 ? <div className="rhyme-bank">{rhymeWords.map((word, index) => <span key={`${word}-${index}`}><b>{word}</b><button aria-label={`${word}を削除`} onClick={() => patchLine(line, { rhymes: rhymeWords.filter((item) => item !== word).join("\n") })}>×</button></span>)}</div> : <small>韻はまだありません。</small>}</div></details>
               </div>
               <div className="lyric-line-actions"><button disabled={lineIndex === 0} onClick={() => void moveLine(section, lineIndex, -1)}>上へ</button><button disabled={lineIndex === lines.length - 1} onClick={() => void moveLine(section, lineIndex, 1)}>下へ</button><button className="danger-text" onClick={() => void deleteLine(section, line)}>削除</button></div>
             </div>;

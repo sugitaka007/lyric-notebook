@@ -808,3 +808,33 @@ body.range-adjusting { overflow:hidden; touch-action:none; }
 .canvas-editor.fullscreen .canvas-stage[data-aspect="9:16"] { width:auto; height:100%; }
 .canvas-editor.fullscreen .canvas-stage[data-aspect="16:9"],.canvas-editor.fullscreen .canvas-stage[data-aspect="1:1"] { width:100%; height:auto; }
 .canvas-editor.fullscreen .element-editor { flex:0 1 auto; max-height:32dvh; overflow-y:auto; }
+
+/* 未整理メモの分類と安定した再編集 */
+.quick-kind { display:flex; min-height:44px; align-items:center; justify-content:space-between; gap:12px; margin-top:6px; color:var(--muted); font-size:12px; }
+.quick-kind select { width:auto; min-width:148px; min-height:44px; }
+.memo-card>summary>.memo-summary-meta { display:grid; justify-items:end; gap:2px; overflow:visible; color:var(--muted); font-size:10px; line-height:1.2; white-space:nowrap; -webkit-line-clamp:unset; }
+.memo-summary-meta i { padding:2px 5px; border-radius:4px; background:var(--paper-2); color:var(--muted); font-size:10px; font-style:normal; }
+.memo-card>summary .memo-summary-meta time { font-size:9px; }
+
+/* 作詞を試すための候補・韻 */
+.lyric-explore-panels { display:grid; grid-column:2; grid-template-columns:repeat(2,minmax(0,1fr)); gap:5px; margin-top:4px; }
+.lyric-explore-panel { min-width:0; overflow:hidden; border:1px solid var(--line); border-radius:7px; background:var(--paper); }
+.lyric-explore-panel[open] { grid-column:1/-1; }
+.lyric-explore-panel>summary { display:flex; min-height:44px; align-items:center; justify-content:space-between; gap:5px; padding:5px 8px; cursor:pointer; list-style:none; }
+.lyric-explore-panel>summary span { overflow:hidden; color:var(--ink); font-size:12px; font-weight:600; text-overflow:ellipsis; white-space:nowrap; }
+.lyric-explore-panel>summary em { display:grid; min-width:22px; height:22px; place-items:center; border-radius:99px; background:var(--paper-2); color:var(--muted); font-size:10px; font-style:normal; }
+.lyric-explore-panel[open]>summary { border-bottom:1px solid var(--line); }
+.lyric-explore-panel>div { display:grid; gap:7px; padding:8px; background:var(--paper-2); }
+.lyric-explore-panel>div>small { color:var(--muted); font-size:11px; }
+.lyric-entry-adder { display:grid; grid-template-columns:minmax(0,1fr) 52px; gap:5px; }
+.lyric-entry-adder input { min-width:0; min-height:44px; background:var(--paper); font-size:16px; }
+.lyric-entry-adder button { min-width:52px; min-height:44px; padding:4px; }
+.lyric-candidate-list { display:grid; max-height:176px; overflow-y:auto; border:1px solid var(--line); border-radius:6px; background:var(--paper); overscroll-behavior:contain; }
+.lyric-candidate-list>div { display:grid; min-height:44px; grid-template-columns:minmax(0,1fr) 50px 44px; align-items:center; border-bottom:1px solid var(--line); }
+.lyric-candidate-list>div:last-child { border-bottom:0; }
+.lyric-candidate-list span { overflow:hidden; padding:7px 8px; font-size:14px; text-overflow:ellipsis; white-space:nowrap; }
+.lyric-candidate-list button { min-width:44px; min-height:44px; padding:0; border:0; border-left:1px solid var(--line); border-radius:0; background:transparent; color:var(--accent); font-size:11px; }
+.rhyme-bank { display:grid; max-height:116px; grid-template-columns:repeat(2,minmax(0,1fr)); gap:5px; overflow-y:auto; overscroll-behavior:contain; }
+.rhyme-bank>span { display:grid; min-width:0; min-height:38px; grid-template-columns:minmax(0,1fr) 36px; align-items:center; overflow:hidden; border:1px solid var(--line); border-radius:6px; background:var(--paper); }
+.rhyme-bank b { overflow:hidden; padding:5px 7px; font-size:13px; font-weight:500; text-overflow:ellipsis; white-space:nowrap; }
+.rhyme-bank button { width:36px; min-width:36px; min-height:36px; padding:0; border:0; border-left:1px solid var(--line); border-radius:0; background:transparent; color:var(--muted); }

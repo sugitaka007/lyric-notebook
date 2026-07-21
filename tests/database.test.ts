@@ -22,18 +22,20 @@ describe("曲・メモ・素材", () => {
     expect(await db.sections.count()).toBe(0);
   });
 
-  it("元の未整理メモを残したまま同じ内容を複数の曲で参照できる", async () => {
-    const song = await createSong(); const another = await createSong("別の曲"); const stamp = now(); const assetId = uid();
+  it("未整理メモを分類付きで曲へ移動し、元メモを取り除く", async () => {
+    const song = await createSong(); const stamp = now(); const assetId = uid();
     await db.media.add({ id: assetId, kind: "audio", name: "録音.m4a", note: "", mimeType: "audio/mp4", blob: new Blob(["audio"]), size: 5, links: [], createdAt: stamp, updatedAt: stamp });
-    const memo: InboxItem = { id: uid(), kind: "note", text: "曖昧な思いつき", assetIds: [assetId], createdAt: stamp, updatedAt: stamp };
-    await db.inbox.add(memo); await moveInboxToSong(memo, song.id); await moveInboxToSong({ ...memo, usedSongIds: [song.id] }, another.id);
+    const memo: InboxItem = { id: uid(), kind: "mv", text: "夜の道路を逆再生する", assetIds: [assetId], createdAt: stamp, updatedAt: stamp };
+    await db.inbox.add(memo); await moveInboxToSong(memo, song.id);
     const idea = await db.ideas.where("songId").equals(song.id).first();
-    expect(idea?.text).toBe("曖昧な思いつき");
+    expect(idea?.text).toBe("夜の道路を逆再生する");
+    expect(idea?.category).toBe("映像");
     expect(idea?.assetIds).toEqual([assetId]);
-    expect(idea?.sourceInboxId).toBe(memo.id);
-    expect((await db.media.get(assetId))?.songId).toBeUndefined();
-    expect(await db.ideas.where("sourceInboxId").equals(memo.id).count()).toBe(2);
-    expect((await db.inbox.get(memo.id))?.usedSongIds).toEqual([song.id, another.id]);
+    expect(idea?.sourceInboxId).toBeUndefined();
+    expect(idea?.sourceExcerpt).toBe(memo.text);
+    expect((await db.media.get(assetId))?.songId).toBe(song.id);
+    expect(await db.inbox.get(memo.id)).toBeUndefined();
+    expect((await loadWorkspace(song.id)).media.map((asset) => asset.id)).toContain(assetId);
   });
 
   it("MV場面を並べ替えられる", async () => {

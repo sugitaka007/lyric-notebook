@@ -163,7 +163,23 @@ export async function useInboxInSong(item: InboxItem, songId: string) {
   });
 }
 
-export const moveInboxToSong = useInboxInSong;
+const ideaCategoryForInbox = (kind: InboxItem["kind"]): IdeaCategory | undefined => kind === "lyric" ? "言葉・歌詞" : kind === "mv" || kind === "image" ? "映像" : kind === "audio" ? "音・メロディ" : undefined;
+
+export async function moveInboxToSong(item: InboxItem, songId: string) {
+  const stamp = now(); const assetIds = inboxAssetIds(item); const text = item.text.trim();
+  await db.transaction("rw", [db.ideas, db.inbox, db.songs, db.media], async () => {
+    const existing = await db.ideas.where("sourceInboxId").equals(item.id).and((idea) => idea.songId === songId).first();
+    if (text && existing) await db.ideas.update(existing.id, { text, category: ideaCategoryForInbox(item.kind), assetIds, sourceExcerpt: text, sourceInboxId: undefined, updatedAt: stamp });
+    else if (text) await db.ideas.add({ id: uid(), songId, text, category: ideaCategoryForInbox(item.kind), assetIds, sourceExcerpt: text, createdAt: item.createdAt, updatedAt: stamp });
+    if (assetIds.length) {
+      const assets = (await db.media.bulkGet(assetIds)).filter((asset): asset is MediaAsset => Boolean(asset));
+      if (assets.length) await db.media.bulkPut(assets.map((asset) => ({ ...asset, songId, updatedAt: stamp })));
+    }
+    await db.ideas.where("sourceInboxId").equals(item.id).modify((idea) => { idea.sourceInboxId = undefined; idea.sourceExcerpt ||= text; });
+    await db.inbox.delete(item.id);
+    await db.songs.update(songId, { updatedAt: stamp, draft: false });
+  });
+}
 
 export async function removeInboxUse(idea: Idea) {
   await db.transaction("rw", [db.ideas, db.inbox], async () => {
