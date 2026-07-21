@@ -651,7 +651,7 @@ h1,h2,h3 { font-family:inherit; letter-spacing:0; }
   .lyric-line-number { text-align:left; }
 }
 
-/* 追加改善: 5タブ、取込フレーズ、歌唱確認、図形スケッチ */
+/* 追加改善: 5タブ、取込メモ、図形スケッチ */
 .bottom-tabs { grid-template-columns:repeat(5,minmax(0,1fr)); }
 .bottom-tabs span { font-size:10px; }
 .save-state button { min-height:28px; padding:0; border:0; background:transparent; color:inherit; font-size:10px; }
@@ -747,3 +747,64 @@ h1,h2,h3 { font-family:inherit; letter-spacing:0; }
   .version-save { grid-template-columns:1fr; }
   .singing-options { grid-template-columns:1fr; }
 }
+
+/* メモ、歌詞、スケッチの操作改善 */
+.copy-source { margin-bottom:10px; padding:10px; border:1px solid var(--line); border-radius:8px; background:var(--paper-2); }
+.copy-source>span { color:var(--muted); font-size:11px; }
+.copy-source>p { max-height:8.5em; margin:5px 0 0; overflow-y:auto; line-height:1.55; white-space:pre-wrap; }
+.memo-section-heading { align-items:center; }
+.memo-section-heading>div { display:flex; min-width:0; align-items:baseline; gap:7px; }
+.memo-section-heading>div>span { color:var(--muted); font-size:13px; }
+.import-toggle { min-height:44px; padding:0 10px; border-color:var(--line); background:var(--paper); color:var(--ink); font-size:12px; }
+.import-toggle[aria-expanded="true"] { border-color:var(--accent); background:var(--accent-soft); }
+.import-toggle em { margin-left:4px; color:var(--muted); font-size:11px; font-style:normal; }
+.memo-section>.import-library-body { margin-top:8px; padding:10px 0 0; border-top:1px solid var(--line); }
+.storage-usage { display:grid; gap:7px; margin-bottom:12px; padding:10px; border:1px solid var(--line); border-radius:8px; background:var(--paper-2); }
+.storage-usage>div { display:flex; align-items:center; justify-content:space-between; gap:12px; font-size:12px; }
+.storage-usage>div>span { color:var(--muted); }
+.storage-usage progress { width:100%; height:8px; accent-color:var(--accent); }
+
+.lyric-detail-buttons { display:grid; grid-column:2; grid-template-columns:repeat(3,minmax(0,1fr)); gap:5px; margin-top:4px; }
+.lyric-detail-panel { min-width:0; border:1px solid var(--line); border-radius:7px; background:var(--paper); }
+.lyric-detail-panel[open] { grid-column:1/-1; }
+.lyric-detail-panel>summary { display:grid; min-height:44px; align-content:center; gap:1px; padding:5px 7px; cursor:pointer; list-style:none; }
+.lyric-detail-panel>summary span { color:var(--ink); font-size:12px; font-weight:600; }
+.lyric-detail-panel>summary small { overflow:hidden; color:var(--muted); font-size:9px; text-overflow:ellipsis; white-space:nowrap; }
+.lyric-detail-panel[open]>summary { border-bottom:1px solid var(--line); }
+.lyric-detail-panel>div { display:grid; gap:8px; padding:9px; background:var(--paper-2); }
+.lyric-detail-panel label { display:grid; gap:4px; color:var(--muted); font-size:11px; }
+.lyric-detail-panel label>small { font-size:10px; }
+.lyric-detail-panel textarea { min-height:58px; background:var(--paper); font-size:16px; }
+.rhyme-words { display:flex; flex-wrap:wrap; gap:5px; }
+.rhyme-words span { padding:5px 8px; border:1px solid var(--line); border-radius:5px; background:var(--paper); color:var(--ink); font-size:13px; }
+
+.material-card.image { grid-template-columns:90px minmax(0,1fr) auto; }
+.material-card.image .material-info { padding:8px 3px 8px 8px; }
+.material-card.image .material-delete { position:static; align-self:start; margin:8px 7px 0 0; background:transparent; }
+
+.layer-panel { margin:6px 0; overflow:hidden; border:1px solid var(--line); border-radius:8px; background:var(--paper); }
+.layer-panel>summary { display:flex; min-height:44px; align-items:center; justify-content:space-between; padding:6px 10px; cursor:pointer; list-style:none; }
+.layer-panel>summary em { color:var(--muted); font-size:11px; font-style:normal; }
+.layer-list { display:grid; max-height:230px; overflow-y:auto; border-top:1px solid var(--line); overscroll-behavior:contain; }
+.layer-list>div { display:grid; min-height:44px; grid-template-columns:minmax(0,1fr) 44px 44px; align-items:center; border-bottom:1px solid var(--line); }
+.layer-list>div:last-child { border-bottom:0; }
+.layer-list>div.active { background:var(--accent-soft); }
+.layer-list button { min-width:44px; min-height:44px; padding:0; border:0; border-left:1px solid var(--line); border-radius:0; background:transparent; }
+.layer-list .layer-select { overflow:hidden; padding:0 10px; border-left:0; color:var(--ink); text-align:left; text-overflow:ellipsis; white-space:nowrap; }
+.layer-list .locked { grid-template-columns:minmax(0,1fr) auto; padding:0 12px; color:var(--muted); font-size:12px; }
+.layer-list .locked small { font-size:10px; }
+.range-field { display:grid; gap:0; }
+.range-field>span { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.range-field output { color:var(--ink); font-size:11px; font-variant-numeric:tabular-nums; }
+.drawing-options input[type="range"],.element-editor input[type="range"] { width:100%; min-height:44px; margin:0; padding:0; touch-action:none; }
+.element-editor { overscroll-behavior:contain; }
+.stroke-editor { grid-template-columns:minmax(0,1fr) minmax(0,1fr); }
+body.range-adjusting { overflow:hidden; touch-action:none; }
+
+.canvas-editor.fullscreen { overflow:hidden; }
+.canvas-editor.fullscreen .layer-panel { display:none; }
+.canvas-editor.fullscreen .canvas-viewport { flex:1 1 0; min-height:0; }
+.canvas-editor.fullscreen .canvas-stage { max-width:100%; max-height:100%; }
+.canvas-editor.fullscreen .canvas-stage[data-aspect="9:16"] { width:auto; height:100%; }
+.canvas-editor.fullscreen .canvas-stage[data-aspect="16:9"],.canvas-editor.fullscreen .canvas-stage[data-aspect="1:1"] { width:100%; height:auto; }
+.canvas-editor.fullscreen .element-editor { flex:0 1 auto; max-height:32dvh; overflow-y:auto; }

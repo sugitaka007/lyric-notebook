@@ -25,6 +25,12 @@ type Props = {
 };
 
 const formatDate = (date: string) => new Intl.DateTimeFormat("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(date));
+const formatBytes = (bytes: number) => {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
+};
 
 export function Home(props: Props) {
   const [text, setText] = useState("");
@@ -35,7 +41,9 @@ export function Home(props: Props) {
   const [memoSearch, setMemoSearch] = useState("");
   const [importing, setImporting] = useState(false);
   const [openMemoGroups, setOpenMemoGroups] = useState<string[]>([]);
+  const [importsOpen, setImportsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [storageInfo, setStorageInfo] = useState<{ usage: number; quota?: number }>();
   const [restoreFile, setRestoreFile] = useState<File>();
   const [restoreInfo, setRestoreInfo] = useState("");
   const [restoreMode, setRestoreMode] = useState<"merge" | "replace">("merge");
@@ -56,6 +64,15 @@ export function Home(props: Props) {
     void db.meta.get("lastBackupAt").then((item) => setLastBackupAt(typeof item?.value === "string" ? item.value : undefined));
     return () => { if (recordingTimer.current) clearInterval(recordingTimer.current); recorder.current?.stream.getTracks().forEach((track) => track.stop()); };
   }, []);
+
+  useEffect(() => {
+    if (!settingsOpen || !navigator.storage?.estimate) return;
+    let active = true;
+    void navigator.storage.estimate().then(({ usage = 0, quota }) => {
+      if (active) setStorageInfo({ usage, quota });
+    }).catch(() => { if (active) setStorageInfo(undefined); });
+    return () => { active = false; };
+  }, [settingsOpen]);
 
   const visibleSongs = useMemo(() => [...props.songs].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), [props.songs]);
   const regularMemos = useMemo(() => props.inbox.filter((item) => !item.importKey), [props.inbox]);
@@ -152,10 +169,11 @@ export function Home(props: Props) {
     catch (error) { props.notify(error instanceof Error ? error.message : "初期化できませんでした。"); }
   }
 
-  const inboxPhrases = props.inbox.filter((item) => item.text.trim()).map((item) => ({ id: item.id, text: item.text.trim() }));
   function openCopy(id: string, extra?: CopyPhrase) {
-    const phrases = extra ? [extra, ...inboxPhrases.filter((item) => item.id !== extra.id)] : inboxPhrases;
-    setCopyRequest({ phrases, initialIds: [id] });
+    const selected = extra ?? props.inbox.find((item) => item.id === id && item.text.trim());
+    if (!selected) return;
+    const phrase = { id: selected.id, text: selected.text.trim() };
+    setCopyRequest({ phrases: [phrase], initialIds: [phrase.id] });
   }
 
   function toggleDefaultRequest(id: GptRequestId) {
@@ -202,12 +220,11 @@ export function Home(props: Props) {
       </section>
 
       <section className="memo-section">
-        <div className="section-heading"><h2>未整理メモ</h2><span>{regularMemos.length}</span></div>
+        <div className="section-heading memo-section-heading"><div><h2>未整理メモ</h2><span>{regularMemos.length}</span></div><button className="import-toggle" aria-expanded={importsOpen} onClick={() => setImportsOpen((open) => !open)}>取込メモ <em>{importedMemos.length}</em></button></div>
         {regularMemos.length > 0 && <div className="memo-list">{regularMemos.map(memoCard)}</div>}
         {regularMemos.length === 0 && <p className="plain-empty">未整理メモはありません。</p>}
+        {importsOpen && <div className="import-library-body"><div className="memo-heading-actions"><button onClick={() => importInput.current?.click()} disabled={importing}>{importing ? "取込中" : "JSONを取り込む"}</button><input ref={importInput} hidden type="file" accept=".json,application/json" onChange={(event) => void importJson(event.target.files?.[0])} /></div>{importedMemos.length > 0 && <input className="memo-search" aria-label="取込メモを検索" value={memoSearch} onChange={(event) => setMemoSearch(event.target.value)} placeholder="取込メモを検索" />}{importGroups.length > 0 && <div className="memo-groups">{importGroups.map((group) => { const expanded = Boolean(memoSearch.trim()) || openMemoGroups.includes(group.name); return <details className="memo-group" key={group.name} open={expanded} onToggle={(event) => { if (memoSearch.trim()) return; const open = event.currentTarget.open; setOpenMemoGroups((current) => open ? Array.from(new Set([...current, group.name])) : current.filter((name) => name !== group.name)); }}><summary><b>{group.name}</b><span>{group.items.length}</span></summary>{expanded && <div className="memo-list">{group.items.map(memoCard)}</div>}</details>; })}</div>}{importedMemos.length === 0 && <p className="plain-empty">取込メモはありません。</p>}{importedMemos.length > 0 && filteredImports.length === 0 && <p className="plain-empty">一致するメモはありません。</p>}</div>}
       </section>
-
-      <section className="import-library-section"><details className="import-library"><summary><span><b>取込フレーズ</b><small>JSONから取り込んだ内容</small></span><em>{importedMemos.length}</em></summary><div className="import-library-body"><div className="memo-heading-actions"><button onClick={() => importInput.current?.click()} disabled={importing}>{importing ? "取込中" : "JSONを取り込む"}</button><input ref={importInput} hidden type="file" accept=".json,application/json" onChange={(event) => void importJson(event.target.files?.[0])} /></div>{importedMemos.length > 0 && <input className="memo-search" aria-label="取込フレーズを検索" value={memoSearch} onChange={(event) => setMemoSearch(event.target.value)} placeholder="取込フレーズを検索" />}{importGroups.length > 0 && <div className="memo-groups">{importGroups.map((group) => { const expanded = Boolean(memoSearch.trim()) || openMemoGroups.includes(group.name); return <details className="memo-group" key={group.name} open={expanded} onToggle={(event) => { if (memoSearch.trim()) return; const open = event.currentTarget.open; setOpenMemoGroups((current) => open ? Array.from(new Set([...current, group.name])) : current.filter((name) => name !== group.name)); }}><summary><b>{group.name}</b><span>{group.items.length}</span></summary>{expanded && <div className="memo-list">{group.items.map(memoCard)}</div>}</details>; })}</div>}{importedMemos.length === 0 && <p className="plain-empty">取込フレーズはありません。</p>}{importedMemos.length > 0 && filteredImports.length === 0 && <p className="plain-empty">一致するフレーズはありません。</p>}</div></details></section>
 
       <section className="library-section">
         <div className="section-heading"><h2>曲一覧</h2><button className="primary compact" onClick={props.onCreate}>＋ 新しい曲</button></div>
@@ -219,7 +236,7 @@ export function Home(props: Props) {
         <details className="settings-group" open><summary>表示</summary><label>テーマ<select value={props.settings.theme} onChange={(event) => void props.onSettings({ theme: event.target.value as AppSettings["theme"] })}><option value="system">端末に合わせる</option><option value="light">明るい</option><option value="dark">暗い</option></select></label><label>文字サイズ<select value={props.settings.fontSize} onChange={(event) => void props.onSettings({ fontSize: event.target.value as AppSettings["fontSize"] })}><option value="small">小</option><option value="standard">標準</option><option value="large">大</option></select></label><label className="setting-color">アクセントカラー<input type="color" value={props.settings.accentColor} onChange={(event) => void props.onSettings({ accentColor: event.target.value })} /></label></details>
         <details className="settings-group"><summary>GPT用コピー</summary><fieldset><legend>初期状態の依頼内容</legend><div className="check-list compact">{GPT_REQUEST_OPTIONS.map((item) => <label key={item.id}><input type="checkbox" checked={props.settings.gptDefaultRequests.includes(item.id)} onChange={() => toggleDefaultRequest(item.id)} /><span>{item.label}</span></label>)}</div></fieldset><label>提示してもらう案の数<select value={props.settings.gptSuggestionCount} onChange={(event) => void props.onSettings({ gptSuggestionCount: Number(event.target.value) as 5 | 10 | 20 })}><option value="5">5案</option><option value="10">10案</option><option value="20">20案</option></select></label><label className="switch-row"><span>コピー前に文章を確認</span><input type="checkbox" checked={props.settings.gptConfirmBeforeCopy} onChange={(event) => void props.onSettings({ gptConfirmBeforeCopy: event.target.checked })} /></label></details>
         <details className="settings-group"><summary>スケッチ</summary><label>初期キャンバス比率<select value={props.settings.sketchDefaultAspect} onChange={(event) => void props.onSettings({ sketchDefaultAspect: event.target.value as AppSettings["sketchDefaultAspect"] })}><option>16:9</option><option>9:16</option><option>1:1</option></select></label><label>構図ガイド<select value={props.settings.sketchGuideDefault ? "show" : "hide"} onChange={(event) => void props.onSettings({ sketchGuideDefault: event.target.value === "show" })}><option value="show">表示</option><option value="hide">非表示</option></select></label><label className="setting-color">ペンの初期色<input type="color" value={props.settings.sketchPenColor} onChange={(event) => void props.onSettings({ sketchPenColor: event.target.value })} /></label><label>ペンの初期太さ<input type="range" min="1" max="28" value={props.settings.sketchPenWidth} onChange={(event) => void props.onSettings({ sketchPenWidth: Number(event.target.value) })} /></label><label>文字の初期サイズ<select value={props.settings.sketchTextSize} onChange={(event) => void props.onSettings({ sketchTextSize: event.target.value as AppSettings["sketchTextSize"] })}><option value="small">小</option><option value="medium">中</option><option value="large">大</option></select></label><label>画像保存時の背景<select value={props.settings.sketchExportBackground} onChange={(event) => void props.onSettings({ sketchExportBackground: event.target.value as AppSettings["sketchExportBackground"] })}><option value="white">白</option><option value="current">現在の背景色</option><option value="transparent">透明</option></select></label></details>
-        <details className="settings-group"><summary>データ管理</summary>{lastBackupAt && <p>最終バックアップ：{new Date(lastBackupAt).toLocaleString("ja-JP")}</p>}<button className="primary full" onClick={exportBackup}>バックアップを書き出す</button><button className="file-picker full" onClick={() => restoreInput.current?.click()}>{restoreFile?.name || "バックアップから復元"}</button><input ref={restoreInput} hidden type="file" accept=".zip,application/zip" onChange={(event) => void chooseRestore(event.target.files?.[0])} />{restoreInfo && <><p className="restore-info">検証済み：{restoreInfo}</p><div className="segmented"><button className={restoreMode === "merge" ? "active" : ""} onClick={() => setRestoreMode("merge")}>追加</button><button className={restoreMode === "replace" ? "active" : ""} onClick={() => setRestoreMode("replace")}>置き換え</button></div><button className={restoreMode === "replace" ? "danger full" : "primary full"} onClick={runRestore}>復元する</button></>}<button className="danger full" onClick={() => void resetAll()}>すべてのデータを初期化</button></details>
+        <details className="settings-group"><summary>データ管理</summary>{storageInfo && <div className="storage-usage"><div><span>アプリの使用容量</span><b>{formatBytes(storageInfo.usage)}</b></div>{storageInfo.quota && <><div><span>利用可能な上限</span><b>{formatBytes(storageInfo.quota)}</b></div><progress aria-label="アプリの使用容量" max={storageInfo.quota} value={storageInfo.usage} /></>}</div>}{lastBackupAt && <p>最終バックアップ：{new Date(lastBackupAt).toLocaleString("ja-JP")}</p>}<button className="primary full" onClick={exportBackup}>バックアップを書き出す</button><button className="file-picker full" onClick={() => restoreInput.current?.click()}>{restoreFile?.name || "バックアップから復元"}</button><input ref={restoreInput} hidden type="file" accept=".zip,application/zip" onChange={(event) => void chooseRestore(event.target.files?.[0])} />{restoreInfo && <><p className="restore-info">検証済み：{restoreInfo}</p><div className="segmented"><button className={restoreMode === "merge" ? "active" : ""} onClick={() => setRestoreMode("merge")}>追加</button><button className={restoreMode === "replace" ? "active" : ""} onClick={() => setRestoreMode("replace")}>置き換え</button></div><button className={restoreMode === "replace" ? "danger full" : "primary full"} onClick={runRestore}>復元する</button></>}<button className="danger full" onClick={() => void resetAll()}>すべてのデータを初期化</button></details>
       </div></div>}
       {copyRequest && <GptCopySheet {...copyRequest} settings={props.settings} onClose={() => setCopyRequest(undefined)} notify={props.notify} />}
     </main>

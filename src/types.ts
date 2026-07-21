@@ -40,7 +40,8 @@ export interface LyricVersion {
   id: string; songId: string; name: string; sections: LyricVersionSection[]; createdAt: string;
 }
 export interface Point { x: number; y: number; }
-export interface Stroke { tool: "pen" | "eraser"; color: string; width: number; points: Point[]; }
+export interface Stroke { id?: string; tool: "pen" | "eraser"; color: string; width: number; points: Point[]; }
+export interface SketchLayerRef { type: "stroke" | "shape" | "annotation" | "text"; id: string; }
 export type SketchTextSize = "small" | "medium" | "large";
 export interface SketchTextElement { id: string; text: string; position: Point; color: string; size: SketchTextSize; }
 export interface SketchArrowElement { id: string; start: Point; end: Point; color: string; width: number; }
@@ -60,6 +61,7 @@ export interface SketchRecord {
   id: string; songId: string; name: string; aspect: AspectRatio; strokes: Stroke[];
   texts?: SketchTextElement[]; arrows?: SketchArrowElement[]; guideVisible?: boolean; guideInExport?: boolean;
   shapes?: SketchShapeElement[]; annotations?: SketchAnnotationElement[];
+  layerOrder?: SketchLayerRef[];
   underlayInExport?: boolean; initialName?: string; draft?: boolean;
   backgroundColor?: string; promptFields?: SketchPromptFields;
   previewBlob?: Blob; underlayBlob?: Blob; relatedLyricId?: string; relatedSceneId?: string;
